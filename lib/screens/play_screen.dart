@@ -185,6 +185,18 @@ class _PlayScreenState extends State<PlayScreen>
     super.dispose();
   }
 
+  /// Why an online search ended without a game (shown instead of closing silently).
+  String _searchEndedMessage(Object e) {
+    if (e is TimeoutException) {
+      return 'No opponent found. Matches are made with other online players, so try again when more players are online, or play the computer.';
+    }
+    final text = e.toString().trim();
+    if (text.isNotEmpty && text.length <= 120 && !text.startsWith('Instance of')) {
+      return 'Could not start the search: $text';
+    }
+    return 'Could not start the search. Check your internet connection and try again.';
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
@@ -247,47 +259,34 @@ class _PlayScreenState extends State<PlayScreen>
                     (isVerySmallScreen ? 150.0 : 160.0) +
                     dailyCardHeight +
                     dailyCardSpacing;
-            final reservedHeight =
-                baseReservedHeight +
-                (showDailyCard ? dailyCardHeight + dailyCardSpacing : 0.0);
-            final remainingHeight = availableHeight - reservedHeight;
-            final buttonAreaHeight = remainingHeight.clamp(
-              isVerySmallScreen ? 150.0 : 160.0,
-              isVerySmallScreen ? 160.0 : (isSmallScreen ? 180.0 : 210.0),
-            );
 
             return Column(
               children: [
                 // Online players count - Fixed height
                 SizedBox(
                   height: onlineCountHeight,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    clipBehavior: Clip.none,
-                    children: [
-                      OnlinePlayersCountWidget(
-                        selectedGameMode: _enabledGameModes.isEmpty
-                            ? null
-                            : _enabledGameModes[_selectedGameMode][Constants
-                                  .timeControl],
-                      ),
-                      Positioned(
-                        right: 4,
-                        child: IconButton(
-                          tooltip: 'Online game modes',
-                          icon: const Icon(Icons.tune),
-                          iconSize: 22,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                            minWidth: 40,
-                            minHeight: 40,
-                          ),
-                          onPressed: _showMatchModesDialog,
-                        ),
-                      ),
-                    ],
+                  child: OnlinePlayersCountWidget(
+                    selectedGameMode: _enabledGameModes.isEmpty
+                        ? null
+                        : _enabledGameModes[_selectedGameMode][Constants
+                              .timeControl],
                   ),
                 ),
+
+                // Everything below the live counters scrolls together, so the
+                // screen can never overflow ("BOTTOM OVERFLOWED BY ..."). When
+                // there is room, the play buttons stay at the bottom.
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: availableHeight - onlineCountHeight,
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            children: [
 
                 // Game Modes Carousel - Dynamic height
                 SizedBox(
@@ -334,18 +333,51 @@ class _PlayScreenState extends State<PlayScreen>
                                     width:
                                         MediaQuery.of(context).size.width *
                                         (screenWidth < 400 ? 0.85 : 0.8),
-                                    child: GameModeCard(
-                                      title: mode[Constants.title],
-                                      timeControl: mode[Constants.timeControl],
-                                      isSelected: _selectedGameMode == index,
-                                      onTap: () {
-                                        setState(() {
-                                          _selectedGameMode = index;
-                                        });
-                                        _carouselController.animateToPage(
-                                          index,
-                                        );
-                                      },
+                                    child: Stack(
+                                      children: [
+                                        Positioned.fill(
+                                          child: GameModeCard(
+                                            title: mode[Constants.title],
+                                            timeControl:
+                                                mode[Constants.timeControl],
+                                            isSelected:
+                                                _selectedGameMode == index,
+                                            onTap: () {
+                                              setState(() {
+                                                _selectedGameMode = index;
+                                              });
+                                              _carouselController.animateToPage(
+                                                index,
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                        // Online game modes (which modes to search in)
+                                        Positioned(
+                                          top: 8,
+                                          right: 8,
+                                          child: Tooltip(
+                                            message: 'Online game modes',
+                                            child: Material(
+                                              color: Colors.black38,
+                                              shape: const CircleBorder(),
+                                              child: InkWell(
+                                                customBorder:
+                                                    const CircleBorder(),
+                                                onTap: _showMatchModesDialog,
+                                                child: const Padding(
+                                                  padding: EdgeInsets.all(8),
+                                                  child: Icon(
+                                                    Icons.tune,
+                                                    size: 20,
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   );
                                 },
@@ -436,18 +468,17 @@ class _PlayScreenState extends State<PlayScreen>
                 // Spacing below ad - Clear separation
                 SizedBox(height: adSpacing),
 
-                // Flexible space - Pushes buttons to bottom (can shrink to 0 if needed)
-                const Spacer(),
+                            ],
+                          ),
 
-                // Play buttons - Always at bottom
-                Container(
-                  height: buttonAreaHeight,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: isVerySmallScreen ? 6 : 8,
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                          // Play buttons
+                          Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: isVerySmallScreen ? 6 : 8,
+                            ),
+                            child: Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       if (_playFeatures['onlineEnabled'] == true) ...[
                       PlayOptionTile(
@@ -574,16 +605,14 @@ class _PlayScreenState extends State<PlayScreen>
                               }
                             }
                           } catch (e) {
+                            dlog('Online search ended with: $e');
                             gameProvider.setLoading(false);
                             _gameSearchStartTime = null; // Clear search timer
                             if (context.mounted) {
                               LoadingDialog.hide(context);
-                              // ScaffoldMessenger.of(context).showSnackBar(
-                              //   SnackBar(
-                              //     content: Text('Failed to start online game: $e'),
-                              //     backgroundColor: Colors.red,
-                              //   ),
-                              // );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(_searchEndedMessage(e))),
+                              );
                             }
                           }
                         },
@@ -765,6 +794,11 @@ class _PlayScreenState extends State<PlayScreen>
                       ),
                       ],
                     ],
+                  ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],

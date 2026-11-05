@@ -37,6 +37,8 @@ class GameSocketService {
   final _chatMessageController = StreamController<Map<String, dynamic>>.broadcast();
   final _friendEventController = StreamController<Map<String, dynamic>>.broadcast();
   final _clubEventController = StreamController<Map<String, dynamic>>.broadcast();
+  final _liveStatsController = StreamController<Map<String, dynamic>>.broadcast();
+  final Map<String, int> _statsSubs = {}; // watched mode ('' = all modes) -> how many widgets watch it
   final _chatTypingController = StreamController<Map<String, dynamic>>.broadcast();
   final _gameInviteController = StreamController<Map<String, dynamic>>.broadcast();
   final _reactionController = StreamController<Map<String, dynamic>>.broadcast();
@@ -93,6 +95,31 @@ class GameSocketService {
   /// Pushed the instant someone sends you a chat message (payload: `{ message }`).
   Stream<Map<String, dynamic>> get onChatMessage => _chatMessageController.stream;
 
+  /// The Play screen's live counters, pushed by the server whenever they change —
+  /// payload: `{ gameMode ('' = all), online, waiting, games, playing }`.
+  Stream<Map<String, dynamic>> get onLiveStats => _liveStatsController.stream;
+
+  /// Start receiving [onLiveStats] for one game mode (null = all modes). Counted: call
+  /// [unsubscribeLiveStats] once for every call to this. Re-sent automatically after a reconnect.
+  void subscribeLiveStats(String? gameMode) {
+    final key = gameMode ?? '';
+    final n = _statsSubs[key] ?? 0;
+    _statsSubs[key] = n + 1;
+    if (n == 0) _socket?.emit('stats:subscribe', {if (key.isNotEmpty) 'gameMode': key});
+  }
+
+  void unsubscribeLiveStats(String? gameMode) {
+    final key = gameMode ?? '';
+    final n = _statsSubs[key] ?? 0;
+    if (n <= 0) return;
+    if (n == 1) {
+      _statsSubs.remove(key);
+      _socket?.emit('stats:unsubscribe', {if (key.isNotEmpty) 'gameMode': key});
+    } else {
+      _statsSubs[key] = n - 1;
+    }
+  }
+
   /// Live club chat events: `{ event: 'message', clubId, message }` and `{ event: 'deleted', clubId, id }`.
   Stream<Map<String, dynamic>> get onClubEvent => _clubEventController.stream;
 
@@ -143,6 +170,10 @@ class GameSocketService {
     socket.onConnect((_) {
       _logger.i('Game socket connected');
       _connectionController.add(true);
+      // A new connection has no live-counter subscriptions yet: ask again for the ones the screens watch.
+      for (final key in _statsSubs.keys) {
+        socket.emit('stats:subscribe', {if (key.isNotEmpty) 'gameMode': key});
+      }
       // After a network drop Socket.IO reconnects with a NEW connection that
       // is not in the game's room any more: rejoin it, or no further moves
       // or results would ever arrive.
@@ -178,6 +209,9 @@ class GameSocketService {
     socket.on('matchmaking:waiting', (_) => _matchmakingWaitingController.add(null));
     socket.on('privateGame:created', (data) => _gameStartController.add(Map<String, dynamic>.from(data)));
     socket.on('chat:message', (data) => _chatMessageController.add(Map<String, dynamic>.from(data)));
+    socket.on('stats:live', (data) {
+      if (data is Map) _liveStatsController.add(Map<String, dynamic>.from(data));
+    });
     socket.on('club:message', (data) => _clubEventController.add({...Map<String, dynamic>.from(data), 'event': 'message'}));
     socket.on('club:message_deleted', (data) => _clubEventController.add({...Map<String, dynamic>.from(data), 'event': 'deleted'}));
     socket.on('chat:typing', (data) => _chatTypingController.add(Map<String, dynamic>.from(data)));
@@ -197,6 +231,7 @@ class GameSocketService {
 
   void disconnect() {
     _activeGameId = null;
+    _statsSubs.clear();
     _socket?.disconnect();
     _socket?.dispose();
     _socket = null;

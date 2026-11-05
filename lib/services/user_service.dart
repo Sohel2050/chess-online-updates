@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:ui' show PlatformDispatcher;
 import 'dart:io';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:get_it/get_it.dart';
 import 'package:logger/logger.dart';
+import 'package:flutter_chess_app/services/game_socket_service.dart';
 import 'package:flutter_chess_app/services/puzzle_service.dart';
 import '../models/user_model.dart';
 import '../services/api_client.dart';
@@ -32,28 +34,71 @@ class UserService {
     return 'US';
   }
 
-  /// Polls the backend's combined live-stats endpoint every 4s instead of
-  /// three separate Firestore `.snapshots()` listeners.
-  Stream<Map<String, int>> getGameStatsStream({String? gameMode}) async* {
-    while (true) {
+  /// Live counters of the Play screen (online / waiting / games). The server pushes them over the game
+  /// socket about 2 s after any change; a normal request fetches the first numbers and acts as a safety
+  /// net (every 5 s while the socket is down or silent for 30 s).
+  Stream<Map<String, int>> getGameStatsStream({String? gameMode}) {
+    final socketService = GameSocketService.instance;
+    late final StreamController<Map<String, int>> controller;
+    Timer? fallbackTimer;
+    StreamSubscription<Map<String, dynamic>>? pushSub;
+    var lastData = DateTime.fromMillisecondsSinceEpoch(0);
+    var gotData = false;
+    final wanted = gameMode ?? '';
+
+    Map<String, int> parse(Map<dynamic, dynamic> r) {
+      int n(dynamic v) => v is num ? v.toInt() : 0;
+      return {
+        'online': n(r['online']),
+        'waiting': n(r['waiting']),
+        'playing': n(r['playing']),
+        // Number of running games (older servers only send `playing` = players).
+        'games': r['games'] is num ? n(r['games']) : n(r['playing']) ~/ 2,
+      };
+    }
+
+    void emit(Map<String, int> m) {
+      gotData = true;
+      lastData = DateTime.now();
+      if (!controller.isClosed) controller.add(m);
+    }
+
+    Future<void> fetchOnce() async {
       try {
         final result = await ApiClient.instance.get(
           '/users/stats/live',
           query: gameMode != null ? {'gameMode': gameMode} : null,
         );
-        yield {
-          'online': result['online'] ?? 0,
-          'waiting': result['waiting'] ?? 0,
-          'playing': result['playing'] ?? 0,
-          // Number of running games (older servers only send `playing` = players).
-          'games': result['games'] ?? ((result['playing'] ?? 0) ~/ 2),
-        };
+        emit(parse(result));
       } catch (e) {
         logger.e('Error in game stats stream: $e');
-        yield {'online': 0, 'waiting': 0, 'playing': 0, 'games': 0};
+        if (!gotData && !controller.isClosed) controller.add({'online': 0, 'waiting': 0, 'playing': 0, 'games': 0});
       }
-      await Future.delayed(const Duration(seconds: 4));
     }
+
+    controller = StreamController<Map<String, int>>(
+      onListen: () {
+        // 1. The server pushes the numbers by socket (about 2 s after any change, and at once on subscribe).
+        pushSub = socketService.onLiveStats.listen((e) {
+          if ((e['gameMode']?.toString() ?? '') == wanted) emit(parse(e));
+        });
+        socketService.subscribeLiveStats(gameMode);
+        // 2. A normal request for the first numbers (also if the socket is not up yet).
+        fetchOnce();
+        // 3. Safety net: ask normally if the socket is down or has been silent for a while.
+        fallbackTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+          if (!socketService.isConnected || DateTime.now().difference(lastData) > const Duration(seconds: 30)) {
+            fetchOnce();
+          }
+        });
+      },
+      onCancel: () {
+        fallbackTimer?.cancel();
+        pushSub?.cancel();
+        socketService.unsubscribeLiveStats(gameMode);
+      },
+    );
+    return controller.stream;
   }
 
   /// Polls just the online count (used by a couple of simpler UI spots
