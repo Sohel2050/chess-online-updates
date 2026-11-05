@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/providers/game_provider.dart';
 import 'package:flutter_chess_app/providers/settings_provider.dart';
@@ -8,8 +10,15 @@ import 'package:flutter_chess_app/providers/connectivity_provider.dart';
 import 'package:flutter_chess_app/providers/puzzle_provider.dart';
 import 'package:flutter_chess_app/providers/premium_provider.dart';
 import 'package:flutter_chess_app/providers/poll_provider.dart';
+import 'package:flutter_chess_app/providers/streak_provider.dart';
+import 'package:flutter_chess_app/providers/mission_provider.dart';
+import 'package:flutter_chess_app/providers/badge_provider.dart';
 import 'package:flutter_chess_app/services/monetization_service.dart';
 import 'package:flutter_chess_app/services/consent_service.dart';
+import 'package:flutter_chess_app/services/push_service.dart';
+import 'package:flutter_chess_app/services/deep_link_service.dart';
+import 'package:flutter_chess_app/services/crash_reporter.dart';
+import 'package:flutter_chess_app/utils/adaptive.dart';
 import 'package:flutter_chess_app/services/version_service.dart';
 import 'package:flutter_chess_app/screens/home_screen.dart';
 import 'package:flutter_chess_app/services/offline_service.dart';
@@ -19,40 +28,60 @@ import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/widgets/force_update_dialog.dart';
 import 'package:get_it/get_it.dart';
 import 'screens/login_screen.dart';
+import 'screens/age_gate_screen.dart';
 import 'package:provider/provider.dart';
 import 'models/user_model.dart';
+import 'widgets/floating_message_button.dart';
 
 // Global navigator key for navigation management
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  ConsentService.navigatorKey = navigatorKey;
-  setupServiceLocator();
+void main() {
+  // Last line of defence: an error nobody caught must be logged, never kill the app.
+  runZonedGuarded<Future<void>>(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+    // Installs the Flutter / platform error handlers and sends crashes to Crashlytics
+    // (does nothing, quietly, until Firebase is configured).
+    await CrashReporter.init();
+    await AnalyticsService.instance.init();
+    AnalyticsService.instance.track('app_open');
+    ConsentService.navigatorKey = navigatorKey;
+    PushService.navigatorKey = navigatorKey;
+    // Game links (https://<host>/g/<code>) tapped outside the app open the import screen.
+    unawaited(DeepLinkService.instance.init(navigatorKey));
+    // Quietly does nothing until android/app/google-services.json exists.
+    unawaited(PushService.instance.init());
+    setupServiceLocator();
 
-  // Initialize version config on the backend (creates it if missing with
-  // current app version).
-  await VersionService.initializeVersionConfigIfNeeded();
+    // Initialize version config on the backend (creates it if missing with
+    // current app version).
+    await VersionService.initializeVersionConfigIfNeeded();
 
-  // TODO: Remove this - TEST MODE for force update dialog
-  //VersionService.useTestMode = true;
+    // TODO: Remove this - TEST MODE for force update dialog
+    //VersionService.useTestMode = true;
 
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => GameProvider()),
-        ChangeNotifierProvider(create: (_) => SettingsProvider()),
-        ChangeNotifierProvider(create: (_) => UserProvider()),
-        ChangeNotifierProvider(create: (_) => LevelPlayProvider()),
-        ChangeNotifierProvider(create: (_) => MonetizationProvider()),
-        ChangeNotifierProvider(create: (_) => PuzzleProvider()),
-        ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
-        ChangeNotifierProvider(create: (_) => PremiumProvider()),
-        ChangeNotifierProvider(create: (_) => PollProvider()),
-      ],
-      child: const MyApp(),
-    ),
-  );
+    runApp(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider(create: (_) => GameProvider()),
+          ChangeNotifierProvider(create: (_) => SettingsProvider()),
+          ChangeNotifierProvider(create: (_) => UserProvider()),
+          ChangeNotifierProvider(create: (_) => LevelPlayProvider()),
+          ChangeNotifierProvider(create: (_) => MonetizationProvider()),
+          ChangeNotifierProvider(create: (_) => PuzzleProvider()),
+          ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
+          ChangeNotifierProvider(create: (_) => PremiumProvider()),
+          ChangeNotifierProvider(create: (_) => PollProvider()),
+          ChangeNotifierProvider(create: (_) => StreakProvider()),
+          ChangeNotifierProvider(create: (_) => MissionProvider()),
+          ChangeNotifierProvider(create: (_) => BadgeProvider()),
+        ],
+        child: const MyApp(),
+      ),
+    );
+  }, (error, stack) {
+    CrashReporter.recordZoneError(error, stack);
+  });
 }
 
 void setupServiceLocator() {
@@ -214,7 +243,7 @@ class _MyAppState extends State<MyApp> {
         if (snapshot.connectionState == ConnectionState.waiting) {
           debugPrint('Showing loading screen...');
           return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
+            body: Center(child: CircularProgressIndicator.adaptive()),
           );
         }
 
@@ -280,9 +309,22 @@ class _MyAppState extends State<MyApp> {
 
   @override
   Widget build(BuildContext context) {
+    final themeMode = context.select<SettingsProvider, ThemeMode>((s) => s.themeMode);
     return MaterialApp(
       navigatorKey: navigatorKey,
+      // App-wide draggable message bubble (hidden in game / puzzle / spectator).
+      builder: (context, child) {
+        final user = context.watch<UserProvider>().user;
+        return Stack(
+          children: [
+            child ?? const SizedBox.shrink(),
+            if (user != null && !user.isGuest)
+              Positioned.fill(child: FloatingMessageButton(user: user)),
+          ],
+        );
+      },
       title: 'Chess Master',
+      themeMode: themeMode,
       theme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -290,7 +332,47 @@ class _MyAppState extends State<MyApp> {
           brightness: Brightness.light,
         ),
         // Custom theme adjustments
-        appBarTheme: const AppBarTheme(centerTitle: false, elevation: 0),
+        appBarTheme: AppBarTheme(centerTitle: isIOS, elevation: 0, scrolledUnderElevation: 0),
+        // iOS: no Material ripple, floating rounded snack bars.
+        splashFactory: isIOS ? NoSplash.splashFactory : null,
+        snackBarTheme: isIOS
+            ? SnackBarThemeData(
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              )
+            : null,
+
+        // Shared look: rounded pop-ups and pill buttons everywhere (AlertDialog, ElevatedButton...).
+        dialogTheme: DialogThemeData(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 14 : 24)),
+          elevation: isIOS ? 0 : 12,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 10 : 14)),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+            elevation: isIOS ? 0 : null,
+            textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 10 : 14)),
+            textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 10 : 14)),
+            textStyle: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            textStyle: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
         navigationBarTheme: NavigationBarThemeData(
           labelBehavior: NavigationDestinationLabelBehavior.onlyShowSelected,
           elevation: 8,
@@ -304,7 +386,47 @@ class _MyAppState extends State<MyApp> {
           seedColor: const Color(0xFF1B5E20),
           brightness: Brightness.dark,
         ),
-        appBarTheme: const AppBarTheme(centerTitle: false, elevation: 0),
+        appBarTheme: AppBarTheme(centerTitle: isIOS, elevation: 0, scrolledUnderElevation: 0),
+        // iOS: no Material ripple, floating rounded snack bars.
+        splashFactory: isIOS ? NoSplash.splashFactory : null,
+        snackBarTheme: isIOS
+            ? SnackBarThemeData(
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              )
+            : null,
+
+        // Shared look: rounded pop-ups and pill buttons everywhere (AlertDialog, ElevatedButton...).
+        dialogTheme: DialogThemeData(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 14 : 24)),
+          elevation: isIOS ? 0 : 12,
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 10 : 14)),
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+            elevation: isIOS ? 0 : null,
+            textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 10 : 14)),
+            textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(isIOS ? 10 : 14)),
+            textStyle: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            textStyle: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
       ),
       home: Consumer<ConnectivityProvider>(
         builder: (context, connectivity, child) {
@@ -319,7 +441,7 @@ class _MyAppState extends State<MyApp> {
                 if (sessionSnapshot.connectionState ==
                     ConnectionState.waiting) {
                   return const Scaffold(
-                    body: Center(child: CircularProgressIndicator()),
+                    body: Center(child: CircularProgressIndicator.adaptive()),
                   );
                 }
 
@@ -353,13 +475,14 @@ class _MyAppState extends State<MyApp> {
 
                 // No valid saved session — automatically continue as guest,
                 // same behavior as the old "no authenticated user" branch.
-                return FutureBuilder<ChessUser>(
+                return AgeGate(
+                  builder: (_) => FutureBuilder<ChessUser>(
                   future: AuthService().signInAnonymously(),
                   builder: (context, guestSnapshot) {
                     if (guestSnapshot.connectionState ==
                         ConnectionState.waiting) {
                       return const Scaffold(
-                        body: Center(child: CircularProgressIndicator()),
+                        body: Center(child: CircularProgressIndicator.adaptive()),
                       );
                     }
 
@@ -371,6 +494,7 @@ class _MyAppState extends State<MyApp> {
 
                     return const LoginScreen();
                   },
+                  ),
                 );
               },
             );
@@ -380,7 +504,7 @@ class _MyAppState extends State<MyApp> {
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Scaffold(
-                    body: Center(child: CircularProgressIndicator()),
+                    body: Center(child: CircularProgressIndicator.adaptive()),
                   );
                 }
 

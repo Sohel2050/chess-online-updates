@@ -159,26 +159,26 @@ class _LevelPlayAdminScreenState extends State<LevelPlayAdminScreen> {
         ],
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator.adaptive())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                SwitchListTile(
+                SwitchListTile.adaptive(
                   title: const Text('Ads enabled'),
                   value: _adsOn,
                   onChanged: (v) => setState(() => _adsOn = v),
                 ),
-                SwitchListTile(
+                SwitchListTile.adaptive(
                   title: const Text('Ask for ad consent (GDPR)'),
                   value: _gdpr,
                   onChanged: (v) => setState(() => _gdpr = v),
                 ),
-                SwitchListTile(
+                SwitchListTile.adaptive(
                   title: const Text('Child-directed app'),
                   value: _childDirected,
                   onChanged: (v) => setState(() => _childDirected = v),
                 ),
-                SwitchListTile(
+                SwitchListTile.adaptive(
                   title: const Text('Enable test suite (next launch)'),
                   value: _testSuite,
                   onChanged: (v) => setState(() => _testSuite = v),

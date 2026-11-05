@@ -97,6 +97,7 @@ class MonetizationService {
     required BuildContext context,
     VoidCallback? onAdClosed,
     VoidCallback? onAdFailedToLoad,
+    bool gameOver = true,
   }) async {
     try {
       final monetizationProvider = Provider.of<MonetizationProvider>(
@@ -115,6 +116,7 @@ class MonetizationService {
         context: context,
         onAdClosed: onAdClosed ?? () {},
         onAdFailedToLoad: onAdFailedToLoad,
+        gameOver: gameOver,
       );
     } catch (e) {
       _logger.e('Error showing interstitial ad: $e');

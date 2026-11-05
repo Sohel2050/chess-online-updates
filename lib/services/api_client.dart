@@ -1,6 +1,8 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_chess_app/services/crash_reporter.dart';
 
 /// Thin HTTP client for the self-hosted backend (see /backend in the repo).
 ///
@@ -17,29 +19,67 @@ class ApiClient {
   static final ApiClient instance = ApiClient._internal();
 
   /// Change this to your deployed backend URL.
-  static const String baseUrl = 'https://api.yourdomain.com';
+  ///
+  /// For local testing pass it at run time instead of editing the code:
+  ///   flutter run --dart-define=API_BASE_URL=http://127.0.0.1:4000
+  static const String baseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://chess-api.albonik.com',
+  );
 
   static const _tokenKey = 'auth_jwt_token';
 
   String? _cachedToken;
 
+  // The login token lives in the platform's encrypted storage (Android Keystore / iOS Keychain),
+  // not in plain SharedPreferences. Older installs are migrated automatically on first read.
+  static const FlutterSecureStorage _secure = FlutterSecureStorage();
+
   Future<String?> get token async {
     if (_cachedToken != null) return _cachedToken;
-    final prefs = await SharedPreferences.getInstance();
-    _cachedToken = prefs.getString(_tokenKey);
+    String? stored;
+    try {
+      stored = await _secure.read(key: _tokenKey);
+    } catch (_) {
+      stored = null; // secure storage unavailable on this device: fall back below
+    }
+    if (stored == null) {
+      final prefs = await SharedPreferences.getInstance();
+      final old = prefs.getString(_tokenKey);
+      if (old != null) {
+        try {
+          await _secure.write(key: _tokenKey, value: old);
+          await prefs.remove(_tokenKey); // moved: no plain copy left behind
+        } catch (_) {
+          // could not move it: keep the old copy so the user stays logged in
+        }
+        stored = old;
+      }
+    }
+    _cachedToken = stored;
     return _cachedToken;
   }
 
   Future<void> setToken(String token) async {
     _cachedToken = token;
+    CrashReporter.setUserId(_uidFromToken(token)); // crash reports show WHICH account (id only)
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, token);
+    try {
+      await _secure.write(key: _tokenKey, value: token);
+      await prefs.remove(_tokenKey);
+    } catch (_) {
+      await prefs.setString(_tokenKey, token); // fallback so login never fails
+    }
   }
 
   Future<void> clearToken() async {
     _cachedToken = null;
+    CrashReporter.setUserId('');
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
+    try {
+      await _secure.delete(key: _tokenKey);
+    } catch (_) {}
   }
 
   /// Reads the logged-in user's Mongo ID out of the JWT payload. This is a
@@ -49,6 +89,10 @@ class ApiClient {
   Future<String?> get currentUserId async {
     final t = await token;
     if (t == null) return null;
+    return _uidFromToken(t);
+  }
+
+  static String? _uidFromToken(String t) {
     final parts = t.split('.');
     if (parts.length != 3) return null;
     try {
@@ -61,6 +105,20 @@ class ApiClient {
       return null;
     }
   }
+
+  // One crash-dashboard entry per failing endpoint per minute (a server that is down must not flood it).
+  final Map<String, DateTime> _lastServerErrorReport = {};
+  void _reportServerError(http.Response response) {
+    final key = '${response.statusCode} ${response.request?.method} ${response.request?.url.path}';
+    final now = DateTime.now();
+    final last = _lastServerErrorReport[key];
+    if (last != null && now.difference(last) < const Duration(minutes: 1)) return;
+    _lastServerErrorReport[key] = now;
+    CrashReporter.recordError('HTTP $key', StackTrace.current, reason: 'server error');
+  }
+
+  /// Without a timeout a bad connection leaves screens spinning forever.
+  static const Duration _timeout = Duration(seconds: 20);
 
   Future<Map<String, String>> _headers({bool withAuth = true}) async {
     final headers = {'Content-Type': 'application/json'};
@@ -85,6 +143,7 @@ class ApiClient {
     } catch (_) {
       body = {'success': false, 'message': 'Invalid server response'};
     }
+    if (response.statusCode >= 500) _reportServerError(response); // path only, no data
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw ApiException(
         statusCode: response.statusCode,
@@ -95,30 +154,38 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> get(String path, {Map<String, dynamic>? query, bool withAuth = true}) async {
-    final response = await http.get(_uri(path, query), headers: await _headers(withAuth: withAuth));
+    final response = await http
+        .get(_uri(path, query), headers: await _headers(withAuth: withAuth))
+        .timeout(_timeout);
     return _decode(response);
   }
 
   Future<Map<String, dynamic>> post(String path, {Map<String, dynamic>? body, bool withAuth = true}) async {
-    final response = await http.post(
-      _uri(path),
-      headers: await _headers(withAuth: withAuth),
-      body: jsonEncode(body ?? {}),
-    );
+    final response = await http
+        .post(
+          _uri(path),
+          headers: await _headers(withAuth: withAuth),
+          body: jsonEncode(body ?? {}),
+        )
+        .timeout(_timeout);
     return _decode(response);
   }
 
   Future<Map<String, dynamic>> put(String path, {Map<String, dynamic>? body, bool withAuth = true}) async {
-    final response = await http.put(
-      _uri(path),
-      headers: await _headers(withAuth: withAuth),
-      body: jsonEncode(body ?? {}),
-    );
+    final response = await http
+        .put(
+          _uri(path),
+          headers: await _headers(withAuth: withAuth),
+          body: jsonEncode(body ?? {}),
+        )
+        .timeout(_timeout);
     return _decode(response);
   }
 
   Future<Map<String, dynamic>> delete(String path, {bool withAuth = true}) async {
-    final response = await http.delete(_uri(path), headers: await _headers(withAuth: withAuth));
+    final response = await http
+        .delete(_uri(path), headers: await _headers(withAuth: withAuth))
+        .timeout(_timeout);
     return _decode(response);
   }
 
@@ -137,7 +204,7 @@ class ApiClient {
     request.headers.addAll(headers);
     request.files.add(http.MultipartFile.fromBytes(field, bytes, filename: filename));
 
-    final streamedResponse = await request.send();
+    final streamedResponse = await request.send().timeout(const Duration(seconds: 60));
     final response = await http.Response.fromStream(streamedResponse);
     return _decode(response);
   }

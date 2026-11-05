@@ -1,10 +1,10 @@
-import 'dart:convert';
+import 'dart:ui' show PlatformDispatcher;
 import 'dart:io';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:get_it/get_it.dart';
 import 'package:logger/logger.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter_chess_app/services/puzzle_service.dart';
 import '../models/user_model.dart';
 import '../services/api_client.dart';
 import '../services/offline_service.dart';
@@ -14,62 +14,22 @@ class UserService {
   final Logger logger = Logger();
   final OfflineService _offlineService = OfflineService();
 
-  /// Get country code from user's IP address
-  /// Returns country code (e.g., 'US', 'GB', 'IN') or 'US' as fallback
+  /// Country code (e.g. 'BD', 'GB', 'IN') taken from the phone's region setting,
+  /// or 'US' if the phone doesn't have one.
+  ///
+  /// This used to call ipify + ip-api.com over plain HTTP. Android release
+  /// builds block plain HTTP, so every user ended up as 'US', and the user's IP
+  /// address was being sent to two third parties. The device region needs no
+  /// network and shares nothing.
   Future<String> getCountryCodeFromIP() async {
-    try {
-      // Get public IP address from ipify (free service)
-      final ipResponse = await http
-          .get(Uri.parse('https://api.ipify.org?format=json'))
-          .timeout(const Duration(seconds: 5));
-
-      if (ipResponse.statusCode != 200) {
-        logger.w('Failed to get public IP: ${ipResponse.statusCode}');
-        return 'US';
+    final dispatcher = PlatformDispatcher.instance;
+    for (final locale in [dispatcher.locale, ...dispatcher.locales]) {
+      final code = locale.countryCode;
+      if (code != null && RegExp(r'^[A-Za-z]{2}$').hasMatch(code)) {
+        return code.toUpperCase();
       }
-
-      final ipData = jsonDecode(ipResponse.body);
-      final publicIp = ipData['ip'] as String?;
-
-      if (publicIp == null || publicIp.isEmpty) {
-        logger.w('Empty IP address received');
-        return 'US';
-      }
-
-      logger.i('Retrieved public IP: $publicIp');
-
-      // Use ip-api.com for geolocation (free, no API key required)
-      final response = await http
-          .get(Uri.parse('http://ip-api.com/json/$publicIp?fields=countryCode'))
-          .timeout(const Duration(seconds: 5));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final countryCode = data['countryCode'] as String?;
-
-        if (countryCode != null && countryCode.isNotEmpty) {
-          logger.i('Detected country code from IP: $countryCode');
-          return countryCode;
-        }
-      } else {
-        logger.w('IP geolocation API returned status ${response.statusCode}');
-      }
-    } catch (e) {
-      logger.e('Error getting country from IP: $e');
     }
-
-    // Fallback to US if detection fails
-    logger.i('Using fallback country code: US');
     return 'US';
-  }
-
-  // save fcmToken to firetore
-  Future<void> saveFcmToken(String fcmToken) async {
-    try {
-      await ApiClient.instance.put('/users/me/fcm-token', body: {'fcmToken': fcmToken});
-    } catch (e) {
-      logger.e('Error saving FCM token: $e');
-    }
   }
 
   /// Polls the backend's combined live-stats endpoint every 4s instead of
@@ -85,10 +45,12 @@ class UserService {
           'online': result['online'] ?? 0,
           'waiting': result['waiting'] ?? 0,
           'playing': result['playing'] ?? 0,
+          // Number of running games (older servers only send `playing` = players).
+          'games': result['games'] ?? ((result['playing'] ?? 0) ~/ 2),
         };
       } catch (e) {
         logger.e('Error in game stats stream: $e');
-        yield {'online': 0, 'waiting': 0, 'playing': 0};
+        yield {'online': 0, 'waiting': 0, 'playing': 0, 'games': 0};
       }
       await Future.delayed(const Duration(seconds: 4));
     }
@@ -217,19 +179,25 @@ class UserService {
     }
   }
 
+  /// Shrinks the picture to a JPEG before upload. Works for any source format
+  /// (JPG, PNG, WEBP, HEIC...). The old version looked for ".jp" in the file name
+  /// and crashed for every picture that wasn't a .jpg/.jpeg.
   Future<File> _compressImage(File file) async {
-    final filePath = file.absolute.path;
-    final lastIndex = filePath.lastIndexOf(RegExp(r'.jp'));
-    final splitted = filePath.substring(0, (lastIndex));
-    final outPath = "${splitted}_out${filePath.substring(lastIndex)}";
-
-    var result = await FlutterImageCompress.compressAndGetFile(
-      file.absolute.path,
-      outPath,
-      quality: 70,
-    );
-
-    return File(result!.path);
+    final outPath =
+        '${Directory.systemTemp.path}/profile_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    try {
+      final result = await FlutterImageCompress.compressAndGetFile(
+        file.absolute.path,
+        outPath,
+        quality: 70,
+        format: CompressFormat.jpeg,
+      );
+      // If compression isn't possible, upload the original; the server resizes it anyway.
+      return result != null ? File(result.path) : file;
+    } catch (e) {
+      logger.w('Image compression failed, uploading the original: $e');
+      return file;
+    }
   }
 
   /// Uploads a profile image to the backend (`POST /users/me/profile-image`,
@@ -296,14 +264,21 @@ class UserService {
     bool isPremium, {
     DateTime? premiumStartDate,
     DateTime? premiumExpiryDate,
+    String? productId,
+    String? purchaseToken,
   }) async {
     try {
       await ApiClient.instance.put('/users/me/premium', body: {
         'isPremium': isPremium,
         if (premiumStartDate != null) 'premiumStartDate': premiumStartDate.toIso8601String(),
         if (premiumExpiryDate != null) 'premiumExpiryDate': premiumExpiryDate.toIso8601String(),
+        // The server checks these with Google Play before granting premium.
+        if (productId != null) 'productId': productId,
+        if (purchaseToken != null) 'purchaseToken': purchaseToken,
       });
       logger.i('Updated premium status for user $userId to $isPremium');
+    } on ApiException {
+      rethrow; // callers need the status code (e.g. 400 = purchase already expired)
     } catch (e) {
       logger.e('Error updating premium status: $e');
       throw Exception('Failed to update premium status.');
@@ -334,7 +309,8 @@ class UserService {
       throw ArgumentError('Name cannot exceed 30 characters');
     }
     // Name can only contain letters, numbers and spaces
-    if (!RegExp(r'^[a-zA-Z0-9\s]+$').hasMatch(name)) {
+    // Letters of ANY language (incl. combining marks like Bengali vowel signs).
+    if (!RegExp(r'^[\p{L}\p{M}\p{N}\s]+$', unicode: true).hasMatch(name)) {
       throw ArgumentError('Name can only contain letters, numbers and spaces');
     }
 
@@ -369,6 +345,7 @@ class UserService {
         'gameResult': gameResult,
         'gameMode': gameMode,
         'gameId': gameId,
+        'date': PuzzleService.localDateKey(), // the user's own calendar day (streak / missions)
         if (opponentId != null && opponentId.isNotEmpty) 'opponentId': opponentId,
       });
 

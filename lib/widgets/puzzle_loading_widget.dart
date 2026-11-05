@@ -25,7 +25,7 @@ class PuzzleLoadingWidget extends StatelessWidget {
           const SizedBox(
             width: 60,
             height: 60,
-            child: CircularProgressIndicator(strokeWidth: 4),
+            child: CircularProgressIndicator.adaptive(strokeWidth: 4),
           ),
           const SizedBox(height: 24),
 

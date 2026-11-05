@@ -15,6 +15,7 @@ class SavedGame {
   final int finalWhitesTime; // in milliseconds
   final int finalBlacksTime; // in milliseconds
   final DateTime createdAt;
+  final String playerColor; // 'white' / 'black' = the side this user played ('' if unknown)
 
   SavedGame({
     required this.gameId,
@@ -31,6 +32,7 @@ class SavedGame {
     required this.finalWhitesTime,
     required this.finalBlacksTime,
     required this.createdAt,
+    this.playerColor = '',
   });
 
   Map<String, dynamic> toMap() {
@@ -49,6 +51,7 @@ class SavedGame {
       Constants.fieldFinalWhitesTime: finalWhitesTime,
       Constants.fieldFinalBlacksTime: finalBlacksTime,
       Constants.fieldCreatedAt: createdAt,
+      'playerColor': playerColor,
     };
   }
 
@@ -70,6 +73,7 @@ class SavedGame {
       createdAt: map[Constants.fieldCreatedAt] is DateTime
           ? map[Constants.fieldCreatedAt]
           : DateTime.tryParse(map[Constants.fieldCreatedAt]?.toString() ?? '') ?? DateTime.now(),
+      playerColor: map['playerColor']?.toString() ?? '',
     );
   }
 }

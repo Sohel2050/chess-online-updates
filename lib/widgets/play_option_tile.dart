@@ -10,6 +10,9 @@ class PlayOptionTile extends StatelessWidget {
   final Color accentColor;
   final VoidCallback onPressed;
 
+  /// Soft expanding rings behind the tile to draw attention (used on Play Online).
+  final bool ripple;
+
   const PlayOptionTile({
     super.key,
     required this.title,
@@ -17,6 +20,7 @@ class PlayOptionTile extends StatelessWidget {
     required this.icon,
     required this.accentColor,
     required this.onPressed,
+    this.ripple = false,
   });
 
   @override
@@ -24,7 +28,7 @@ class PlayOptionTile extends StatelessWidget {
     final screenHeight = MediaQuery.of(context).size.height;
     final isVerySmallScreen = screenHeight < 600;
 
-    return Material(
+    final tile = Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
@@ -103,6 +107,74 @@ class PlayOptionTile extends StatelessWidget {
           ),
         ),
       ),
+    );
+    return ripple ? _RippleRings(color: accentColor, child: tile) : tile;
+  }
+}
+
+/// Two staggered rings that grow outward from the tile and fade away.
+class _RippleRings extends StatefulWidget {
+  final Color color;
+  final Widget child;
+  const _RippleRings({required this.color, required this.child});
+
+  @override
+  State<_RippleRings> createState() => _RippleRingsState();
+}
+
+class _RippleRingsState extends State<_RippleRings>
+    with SingleTickerProviderStateMixin {
+  static const double _maxSpread = 14;
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  Widget _ring(double phase) {
+    final t = (_c.value + phase) % 1.0;
+    final d = _maxSpread * Curves.easeOut.transform(t);
+    return Positioned(
+      left: -d,
+      right: -d,
+      top: -d,
+      bottom: -d,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18 + d),
+          border: Border.all(
+            color: widget.color.withValues(alpha: 0.55 * (1 - t)),
+            width: 2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (MediaQuery.of(context).disableAnimations) return widget.child;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: _c,
+              builder: (context, _) => Stack(
+                clipBehavior: Clip.none,
+                children: [_ring(0), _ring(0.5)],
+              ),
+            ),
+          ),
+        ),
+        widget.child,
+      ],
     );
   }
 }

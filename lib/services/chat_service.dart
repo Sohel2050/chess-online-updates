@@ -28,24 +28,84 @@ class ChatService {
     return parts[0] == myId ? parts[1] : parts[0];
   }
 
-  ChatMessage _fromJson(Map<String, dynamic> json) {
-    return ChatMessage(
-      id: json['_id']?.toString() ?? '',
-      senderId: json['senderId'] ?? '',
-      text: json['text'] ?? '',
-      timestamp: DateTime.parse(json['timestamp']),
-      isRead: json['isRead'] ?? false,
-    );
+  ChatMessage _fromJson(Map<String, dynamic> json) =>
+      ChatMessage.fromMap(json['_id']?.toString() ?? '', json);
+
+  String _otherIdOrThrow(String chatRoomId, String? myId) {
+    final otherId = _otherUserIdFromRoomId(chatRoomId, myId);
+    if (otherId == null) throw Exception('Could not resolve chat recipient');
+    return otherId;
   }
 
-  Future<void> sendMessage(String chatRoomId, ChatMessage message) async {
+  /// Sends a text message, or a sticker when [sticker] is true (then
+  /// `message.text` is the sticker id). [replyToId] quotes another message.
+  Future<void> sendMessage(
+    String chatRoomId,
+    ChatMessage message, {
+    bool sticker = false,
+    String? replyToId,
+  }) async {
     try {
       final myId = await _api.currentUserId;
-      final otherId = _otherUserIdFromRoomId(chatRoomId, myId);
-      if (otherId == null) throw Exception('Could not resolve chat recipient');
-      await _api.post('/chat/$otherId/messages', body: {'text': message.text});
+      final otherId = _otherIdOrThrow(chatRoomId, myId);
+      await _api.post('/chat/$otherId/messages', body: {
+        'text': message.text,
+        if (sticker) 'type': 'sticker',
+        if (replyToId != null) 'replyToId': replyToId,
+      });
     } catch (e) {
       _logger.e('Error sending message: $e');
+      rethrow;
+    }
+  }
+
+  /// Invites a friend to WATCH the running game [gameId] (read-only). Leaves a "watch"
+  /// bubble in their chat; tapping it opens the spectator screen.
+  Future<void> sendWatchInvite({required String gameId, required String friendId}) async {
+    try {
+      await _api.post('/games/$gameId/watch-invite', body: {'friendId': friendId});
+    } catch (e) {
+      _logger.e('Error sending watch invite: $e');
+      rethrow;
+    }
+  }
+
+  /// Sets your reaction on a message; pass null to remove it.
+  Future<void> reactToMessage(String messageId, String? emoji) async {
+    try {
+      await _api.put('/chat/messages/$messageId/reaction', body: {'emoji': emoji ?? ''});
+    } catch (e) {
+      _logger.e('Error reacting to message: $e');
+      rethrow;
+    }
+  }
+
+  /// Deletes one of YOUR messages (for both people).
+  Future<void> deleteMessage(String messageId) async {
+    try {
+      await _api.delete('/chat/messages/$messageId');
+    } catch (e) {
+      _logger.e('Error deleting message: $e');
+      rethrow;
+    }
+  }
+
+  Future<void> reportUser({
+    required String chatRoomId,
+    required String reason,
+    String? details,
+    String? messageId,
+  }) async {
+    try {
+      final myId = await _api.currentUserId;
+      final otherId = _otherIdOrThrow(chatRoomId, myId);
+      await _api.post('/chat/$otherId/report', body: {
+        'reason': reason,
+        if (details != null && details.isNotEmpty) 'details': details,
+        if (messageId != null) 'messageId': messageId,
+      });
+    } catch (e) {
+      _logger.e('Error reporting user: $e');
       rethrow;
     }
   }

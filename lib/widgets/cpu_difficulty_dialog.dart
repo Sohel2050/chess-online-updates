@@ -17,7 +17,7 @@ class CPUDifficultyDialog extends StatefulWidget {
 }
 
 class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
-  int _selectedDifficulty = 2; // Default to Normal
+  int _selectedDifficulty = 0; // Default to Beginner
   int _selectedColor = Squares.white; // Default to White
 
   @override
@@ -32,9 +32,9 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
             'Choose Your Color',
             style: Theme.of(
               context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(
@@ -101,14 +101,15 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
                 child: const Text('Cancel'),
               ),
               const SizedBox(width: 12),
-              ElevatedButton(
+              FilledButton.icon(
+                icon: const Icon(Icons.play_arrow_rounded),
                 onPressed: () {
                   log(
                     'Selected Difficulty: $_selectedDifficulty, Color: $_selectedColor',
                   );
                   widget.onConfirm(_selectedDifficulty, _selectedColor);
                 },
-                child: const Text('Start Game'),
+                label: const Text('Start Game'),
               ),
             ],
           ),

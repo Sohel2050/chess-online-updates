@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/services/levelplay_service.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/screens/levelplay_admin_screen.dart';
+import 'package:flutter_chess_app/screens/admin_messages_screen.dart';
+import 'package:flutter_chess_app/screens/admin_community_screen.dart';
+import 'package:flutter_chess_app/screens/admin_reports_screen.dart';
+import 'package:flutter_chess_app/screens/admin_analytics_screen.dart';
 import 'package:flutter_chess_app/services/admin_service.dart';
 import 'package:flutter_chess_app/services/version_service.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
+import 'package:flutter_chess_app/widgets/contact_settings_card.dart';
 import 'package:flutter_chess_app/widgets/main_app_button.dart';
 import 'package:logger/logger.dart';
 
@@ -100,6 +105,7 @@ class _AdminScreenState extends State<AdminScreen> {
 
     try {
       final result = await _adminService.getDatabaseStats(widget.user.email!);
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -203,6 +209,7 @@ class _AdminScreenState extends State<AdminScreen> {
       final result = await _adminService.cleanupArchivedGames(
         widget.user.email!,
       );
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -259,6 +266,7 @@ class _AdminScreenState extends State<AdminScreen> {
       final result = await _adminService.cleanupWaitingGames(
         widget.user.email!,
       );
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -334,6 +342,7 @@ class _AdminScreenState extends State<AdminScreen> {
       final result = await _adminService.getGameModeSettings(
         widget.user.email!,
       );
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -403,7 +412,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                   ],
                                 ),
                               ),
-                              Switch(
+                              Switch.adaptive(
                                 value: isEnabled,
                                 onChanged: (newValue) {
                                   setState(() {
@@ -583,6 +592,7 @@ class _AdminScreenState extends State<AdminScreen> {
                 updatedModes,
               );
 
+              if (!mounted) return;
               setState(() {
                 _isLoading = false;
               });
@@ -690,6 +700,7 @@ class _AdminScreenState extends State<AdminScreen> {
 
     try {
       final result = await _adminService.verifyActiveGames(widget.user.email!);
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -908,6 +919,7 @@ class _AdminScreenState extends State<AdminScreen> {
       final result = await _adminService.cleanupStaleActiveGames(
         widget.user.email!,
       );
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -1016,6 +1028,7 @@ class _AdminScreenState extends State<AdminScreen> {
         inactiveDays: 15,
       );
 
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -1065,6 +1078,7 @@ class _AdminScreenState extends State<AdminScreen> {
       // Refresh user statistics once the dialog is dismissed.
       await _loadUserStatistics();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -1102,7 +1116,7 @@ class _AdminScreenState extends State<AdminScreen> {
           if (!snapshot.hasData || status == null) {
             return const SizedBox(
               height: 60,
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: CircularProgressIndicator.adaptive()),
             );
           }
 
@@ -1209,6 +1223,7 @@ class _AdminScreenState extends State<AdminScreen> {
       await _adminService.updatePlayFeatures({key: value});
     } catch (e) {
       // Revert on failure and let the admin know.
+      if (!mounted) return;
       setState(() => _playFeatures = {..._playFeatures, key: !value});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1237,6 +1252,7 @@ class _AdminScreenState extends State<AdminScreen> {
     try {
       await _adminService.updateVoiceChatAdGateEnabled(value);
     } catch (e) {
+      if (!mounted) return;
       setState(() => _voiceChatAdGateEnabled = !value);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1244,6 +1260,108 @@ class _AdminScreenState extends State<AdminScreen> {
         );
       }
     }
+  }
+
+  Future<void> _editAdFrequency() async {
+    final cur = await _adminService.getAdFrequency();
+    if (!mounted) return;
+
+    final openDay = TextEditingController(text: '${cur['appOpenMaxPerDay']}');
+    final openGap = TextEditingController(text: '${cur['appOpenMinGapHours']}');
+    final interEvery =
+        TextEditingController(text: '${cur['interstitialEveryNGameOvers']}');
+    final interHour =
+        TextEditingController(text: '${cur['interstitialMaxPerHour']}');
+
+    Widget field(String label, TextEditingController c,
+            {bool decimal = false}) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: TextField(
+            controller: c,
+            keyboardType: TextInputType.numberWithOptions(decimal: decimal),
+            decoration: InputDecoration(
+              labelText: label,
+              border: const OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+        );
+
+    final saved = await AnimatedDialog.show<bool>(
+      maxWidth: 400,
+      context: context,
+      title: 'Ad Frequency',
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('App Open',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            field('Max per day', openDay),
+            field('Min gap between ads (hours)', openGap, decimal: true),
+            const SizedBox(height: 4),
+            const Text('Interstitial',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            field('1 ad every N game overs', interEvery),
+            field('Max per hour', interHour),
+            const Text('0 = no limit',
+                style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+
+    final perDay = int.tryParse(openDay.text.trim());
+    final gap = double.tryParse(openGap.text.trim().replaceAll(',', '.'));
+    final every = int.tryParse(interEvery.text.trim());
+    final perHour = int.tryParse(interHour.text.trim());
+    openDay.dispose();
+    openGap.dispose();
+    interEvery.dispose();
+    interHour.dispose();
+
+    if (saved != true || !mounted) return;
+
+    if (perDay == null ||
+        gap == null ||
+        every == null ||
+        perHour == null ||
+        perDay < 0 ||
+        gap < 0 ||
+        every < 0 ||
+        perHour < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter valid numbers (0 or more)')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    final ok = await _adminService.updateAdFrequency(
+      appOpenMaxPerDay: perDay,
+      appOpenMinGapHours: gap,
+      interstitialEveryNGameOvers: every,
+      interstitialMaxPerHour: perHour,
+    );
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? 'Ad frequency saved' : 'Failed to save')),
+    );
   }
 
   Future<void> _toggleAdsForApp() async {
@@ -1423,6 +1541,7 @@ class _AdminScreenState extends State<AdminScreen> {
         selectedAdType,
         newState,
       );
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -1462,6 +1581,7 @@ class _AdminScreenState extends State<AdminScreen> {
         }
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
       });
@@ -1936,6 +2056,44 @@ class _AdminScreenState extends State<AdminScreen> {
             onPressed: _isLoading ? null : _loadUserStatistics,
           ),
           IconButton(
+            icon: const Icon(Icons.insights),
+            tooltip: 'Usage summary',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const AdminAnalyticsScreen()),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.flag),
+            tooltip: 'Reports and appeals',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const AdminReportsScreen()),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.emoji_events),
+            tooltip: 'Tournaments and clubs',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const AdminCommunityScreen()),
+              );
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.mail),
+            tooltip: 'User Messages',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const AdminMessagesScreen(),
+                ),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.admin_panel_settings),
             onPressed: () {
               Navigator.of(context).push(
@@ -2044,7 +2202,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     const Card(
                       child: Padding(
                         padding: EdgeInsets.all(24.0),
-                        child: Center(child: CircularProgressIndicator()),
+                        child: Center(child: CircularProgressIndicator.adaptive()),
                       ),
                     ),
 
@@ -2068,7 +2226,7 @@ class _AdminScreenState extends State<AdminScreen> {
                       child: _playFeaturesLoaded
                           ? Column(
                               children: [
-                                SwitchListTile(
+                                SwitchListTile.adaptive(
                                   title: const Text('Play Online'),
                                   subtitle: const Text(
                                     'Matchmaking against a random opponent',
@@ -2076,13 +2234,13 @@ class _AdminScreenState extends State<AdminScreen> {
                                   value: _playFeatures['onlineEnabled'] ?? true,
                                   onChanged: (v) => _togglePlayFeature('onlineEnabled', v),
                                 ),
-                                SwitchListTile(
+                                SwitchListTile.adaptive(
                                   title: const Text('Computer'),
                                   subtitle: const Text('Play against the CPU'),
                                   value: _playFeatures['cpuEnabled'] ?? true,
                                   onChanged: (v) => _togglePlayFeature('cpuEnabled', v),
                                 ),
-                                SwitchListTile(
+                                SwitchListTile.adaptive(
                                   title: const Text('Local Multiplayer'),
                                   subtitle: const Text(
                                     'Two players, same device',
@@ -2095,7 +2253,7 @@ class _AdminScreenState extends State<AdminScreen> {
                                 ),
                               ],
                             )
-                          : const Center(child: CircularProgressIndicator()),
+                          : const Center(child: CircularProgressIndicator.adaptive()),
                     ),
                   ),
 
@@ -2117,7 +2275,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: _voiceChatAdGateLoaded
-                          ? SwitchListTile(
+                          ? SwitchListTile.adaptive(
                               title: const Text('Voice Chat Ad-Gate'),
                               subtitle: const Text(
                                 'When on, non-premium players must watch an ad '
@@ -2128,9 +2286,21 @@ class _AdminScreenState extends State<AdminScreen> {
                               value: _voiceChatAdGateEnabled,
                               onChanged: _toggleVoiceChatAdGate,
                             )
-                          : const Center(child: CircularProgressIndicator()),
+                          : const Center(child: CircularProgressIndicator.adaptive()),
                     ),
                   ),
+
+                  const SizedBox(height: 32),
+
+                  // Contact Us: support email + WhatsApp on/off
+                  Text(
+                    'Contact Us',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const ContactSettingsCard(),
 
                   const SizedBox(height: 32),
 
@@ -2443,7 +2613,7 @@ class _AdminScreenState extends State<AdminScreen> {
                           else
                             const Padding(
                               padding: EdgeInsets.symmetric(vertical: 16),
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator.adaptive(strokeWidth: 2),
                             ),
                           MainAppButton(
                             text: 'Manage Ads',
@@ -2451,6 +2621,15 @@ class _AdminScreenState extends State<AdminScreen> {
                                 ? () {}
                                 : () => _toggleAdsForApp(),
                             icon: Icons.settings,
+                            isPrimary: false,
+                          ),
+                          const SizedBox(height: 8),
+                          MainAppButton(
+                            text: 'Ad Frequency',
+                            onPressed: (_isLoading || !_adsStatusLoaded)
+                                ? () {}
+                                : () => _editAdFrequency(),
+                            icon: Icons.timer,
                             isPrimary: false,
                           ),
                         ],
@@ -2588,7 +2767,7 @@ class _AdminScreenState extends State<AdminScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        CircularProgressIndicator(),
+                        CircularProgressIndicator.adaptive(),
                         SizedBox(height: 16),
                         Text('Loading...', style: TextStyle(fontSize: 16)),
                       ],

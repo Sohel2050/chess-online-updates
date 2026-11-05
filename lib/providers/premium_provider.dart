@@ -14,6 +14,15 @@ class PremiumProvider with ChangeNotifier {
   ChessUser? _currentUser;
   final StreamController<bool> _purchaseStatusController =
       StreamController<bool>.broadcast();
+  StreamSubscription<List<PremiumProduct>>? _productsSub;
+  StreamSubscription<bool>? _statusSub;
+
+  /// "Remove ads" only counts while it hasn't expired.
+  static bool _isPremiumNow(ChessUser user) {
+    if (user.removeAds != true) return false;
+    final expiry = user.premiumExpiryDate;
+    return expiry == null || expiry.isAfter(DateTime.now());
+  }
 
   // Premium features
   bool get isPremium => _isPremium;
@@ -26,16 +35,16 @@ class PremiumProvider with ChangeNotifier {
   Future<void> init(ChessUser user) async {
     _logger.i('Initializing PremiumProvider for user: ${user.uid}');
     _currentUser = user;
-    _isPremium = user.removeAds ?? false;
+    _isPremium = _isPremiumNow(user);
 
     // Initialize the in-app purchase service
     await _purchaseService.init();
 
-    // Listen to product updates
-    _purchaseService.productsStream.listen(_handleProductsUpdate);
-
-    // Listen to purchase status updates
-    _purchaseService.purchaseStatusStream.listen(_handlePurchaseStatusUpdate);
+    // init() can run again (e.g. after a re-login): replace, never stack, listeners.
+    await _productsSub?.cancel();
+    await _statusSub?.cancel();
+    _productsSub = _purchaseService.productsStream.listen(_handleProductsUpdate);
+    _statusSub = _purchaseService.purchaseStatusStream.listen(_handlePurchaseStatusUpdate);
 
     notifyListeners();
   }
@@ -128,13 +137,14 @@ class PremiumProvider with ChangeNotifier {
   // Update the current user
   void updateCurrentUser(ChessUser user) {
     _currentUser = user;
-    _isPremium = user.removeAds ?? false;
+    _isPremium = _isPremiumNow(user);
     notifyListeners();
   }
 
   @override
   void dispose() {
-    _purchaseService.dispose();
+    _productsSub?.cancel();
+    _statusSub?.cancel();
     _purchaseStatusController.close();
     super.dispose();
   }

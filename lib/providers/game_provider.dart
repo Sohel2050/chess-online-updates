@@ -1,11 +1,14 @@
 import 'dart:async';
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/models/game_room_model.dart';
 import 'package:flutter_chess_app/models/saved_game_model.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/services/captured_piece_tracker.dart';
+import 'package:flutter_chess_app/services/sound_service.dart';
 import 'package:flutter_chess_app/services/chat_service.dart';
 import 'package:flutter_chess_app/services/friend_service.dart';
+import 'package:flutter_chess_app/services/game_analyzer.dart';
 import 'package:flutter_chess_app/services/game_socket_service.dart';
 import 'package:flutter_chess_app/services/game_invite_service.dart';
 import 'package:flutter_chess_app/services/saved_game_service.dart';
@@ -60,6 +63,40 @@ class GameProvider extends ChangeNotifier {
   bool _stockfishInitialized = false;
   final Logger _logger = Logger();
 
+  // ---- practice coach (live warnings in games against the computer) ----
+  /// Live warning about the player's last move; the game screen shows it.
+  final ValueNotifier<CoachWarning?> coachWarning = ValueNotifier<CoachWarning?>(null);
+  bool _coachEnabled = true;
+  bool get coachEnabled => _coachEnabled;
+  bool _coachBusy = false;
+  Completer<void>? _coachDone;
+  final EngineLineParser _coachParser = EngineLineParser();
+  Timer? _coachClearTimer;
+
+  void setCoachEnabled(bool value) {
+    _coachEnabled = value;
+    if (!value) coachWarning.value = null;
+    notifyListeners();
+  }
+
+  /// Shows [w] for a few seconds (used by the CPU coach and by online training games).
+  void showCoachWarning(CoachWarning w) {
+    if (_disposed) return;
+    coachWarning.value = w;
+    _coachClearTimer?.cancel();
+    _coachClearTimer = Timer(const Duration(seconds: 6), () {
+      if (!_disposed) coachWarning.value = null;
+    });
+  }
+
+  void clearCoachWarning() {
+    _coachClearTimer?.cancel();
+    coachWarning.value = null;
+  }
+
+  /// True for a friendly online game the two friends agreed to play in training mode.
+  bool get isTrainingGame => _isOnlineGame && (_onlineGameRoom?.trainingMode ?? false);
+
   final SavedGameService _savedGameService = SavedGameService();
   final UserService _userService = UserService();
   final ChatService _chatService = ChatService();
@@ -69,6 +106,34 @@ class GameProvider extends ChangeNotifier {
   StreamSubscription<Map<String, dynamic>>? _socketGameUpdateSub;
   StreamSubscription<Map<String, dynamic>>? _socketOpponentMoveSub;
   StreamSubscription<Map<String, dynamic>>? _socketGameEndedSub;
+  StreamSubscription<Map<String, dynamic>>? _socketOppDisconnectedSub;
+  StreamSubscription<Map<String, dynamic>>? _socketOppReconnectedSub;
+  StreamSubscription<Map<String, dynamic>>? _socketPresenceSub;
+  StreamSubscription<bool>? _socketConnectionSub;
+
+  // ---- Opponent presence (online = green, offline = grey) ----
+  bool _isOpponentOnline = true;
+  /// True only while the opponent has a live connection to the game server.
+  bool get isOpponentOnline => _isOpponentOnline;
+
+  /// Opponent's user id in the current online game (null if unknown).
+  String? get _opponentUserId {
+    final r = _onlineGameRoom;
+    if (r == null) return null;
+    final me = _currentUserIdForSocket ?? '';
+    return r.player1Id == me ? r.player2Id : r.player1Id;
+  }
+
+  /// Called by the game screen when the app is minimised (false) or comes back (true).
+  void setAppForeground(bool foreground) {
+    if (_isOnlineGame) _gameSocketService.setForeground(foreground);
+  }
+
+  void _setOpponentOnline(bool online) {
+    if (_isOpponentOnline == online) return;
+    _isOpponentOnline = online;
+    notifyListeners();
+  }
 
   bool _vsCPU = false;
   bool _localMultiplayer = false;
@@ -103,6 +168,8 @@ class GameProvider extends ChangeNotifier {
 
   bool _drawOfferReceived = false;
   bool _drawOfferRejected = false; // For the player who offered the draw
+  bool _takebackReceived = false; // The opponent asked to take back a move
+  bool _takebackRejected = false; // Our takeback request was declined
   bool _rematchOfferSent = false; // Track if current user sent a rematch offer
   bool _rematchPending =
       false; // Track if rematch is accepted and ready to start
@@ -227,6 +294,39 @@ class GameProvider extends ChangeNotifier {
 
   bool get drawOfferRejected => _drawOfferRejected;
 
+  bool get takebackReceived => _takebackReceived;
+  bool get takebackRejected => _takebackRejected;
+
+  String? get _myOnlineId => _onlineGameRoom == null
+      ? null
+      : (_isHost ? _onlineGameRoom!.player1Id : _onlineGameRoom!.player2Id);
+
+  /// Online game that is still running and has seen fewer than 2 plies: abort is possible (no result, no rating change).
+  bool get canAbortOnline =>
+      _isOnlineGame &&
+      !_localMultiplayer &&
+      _onlineGameRoom != null &&
+      _onlineGameRoom!.status == Constants.statusActive &&
+      _gameResultNotifier.value == null &&
+      _onlineGameRoom!.moves.length < 2;
+
+  /// True when we have made a move that could be taken back and no request is open.
+  bool get canOfferTakeback {
+    final room = _onlineGameRoom;
+    if (!_isOnlineGame || _localMultiplayer || room == null) return false;
+    if (room.status != Constants.statusActive || _gameResultNotifier.value != null) return false;
+    if (room.takebackStatus == Constants.drawOfferStatusPending) return false;
+    final n = room.moves.length;
+    final myColor = _isHost ? room.player1Color : (room.player2Color ?? Squares.black);
+    final iAmWhite = myColor == Squares.white;
+    return !(n == 0 || (n == 1 && !iAmWhite));
+  }
+
+  bool get takebackOfferSent =>
+      _onlineGameRoom != null &&
+      _onlineGameRoom!.takebackStatus == Constants.drawOfferStatusPending &&
+      _onlineGameRoom!.takebackOfferedBy == _myOnlineId;
+
   bool get friendRequestReceived => _friendRequestReceived;
 
   String? get friendRequestSenderId => _friendRequestSenderId;
@@ -316,7 +416,7 @@ class GameProvider extends ChangeNotifier {
 
     try {
       _audioPlayer = AudioPlayer();
-      await _audioPlayer.setAsset('assets/audio/timer_tick.mp3');
+      await _audioPlayer.setAsset('assets/audio/timer_tick.wav');
       _audioPlayerInitialized = true;
       _logger.i('Audio player initialized successfully for timer ticks');
     } catch (e) {
@@ -325,14 +425,36 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
+  // False while the game screen is closed or the app is in the background:
+  // no game sound may start in that state.
+  bool _gameSoundsAllowed = true;
+
+  void setGameSoundsAllowed(bool allowed) {
+    _gameSoundsAllowed = allowed;
+    if (!allowed) _stopAudioPlayer();
+  }
+
+  /// Move / capture / castle / check sound for the move that turned [fenBefore]
+  /// into the current position. Silent when the game screen is closed or the
+  /// app is in the background (same rule as the other game sounds).
+  void _playMoveSound(String fenBefore) {
+    if (!_gameSoundsAllowed) return;
+    SoundService.instance.playMove(fenBefore, _game.fen);
+  }
+
   /// Play timer tick sound
   Future<void> playTimerTickSound() async {
+    if (!_gameSoundsAllowed) return;
+    if (!SoundService.instance.audible) return; // Options > Sound effects
     try {
       // Ensure audio player is initialized
       if (!_audioPlayerInitialized) {
         _logger.d('Audio player not initialized, initializing now...');
         await _initializeAudioPlayer();
       }
+
+      // The screen may have been closed / the app backgrounded while we were loading.
+      if (!_gameSoundsAllowed) return;
 
       if (_audioPlayerInitialized) {
         try {
@@ -355,7 +477,10 @@ class GameProvider extends ChangeNotifier {
 
   /// Resigns the current game, setting the game result to a win for the opponent.
   Future<void> resignGame({String? userId}) async {
-    final winnerColor = _game.state.turn == Squares.white
+    // The player who resigns loses, whoever's turn it is. Only in pass-and-play
+    // (one device, two players) is "the side to move" the one resigning.
+    final resigningColor = _localMultiplayer ? _game.state.turn : _player;
+    final winnerColor = resigningColor == Squares.white
         ? Squares.black
         : Squares.white;
     final winnerId = _isOnlineGame && _onlineGameRoom != null
@@ -427,6 +552,32 @@ class GameProvider extends ChangeNotifier {
       _startTimer();
     }
     notifyListeners();
+  }
+
+  /// Asks the opponent to let us take back our last move (the server decides how many plies go).
+  Future<void> offerTakeback() async {
+    if (!canOfferTakeback) return;
+    _gameSocketService.offerTakeback(_onlineGameRoom!.gameId);
+    notifyListeners();
+  }
+
+  /// Answers the opponent's takeback request.
+  Future<void> handleTakebackOffer(bool accepted) async {
+    if (!_isOnlineGame || _onlineGameRoom == null) return;
+    _takebackReceived = false;
+    _gameSocketService.respondToTakeback(gameId: _onlineGameRoom!.gameId, accepted: accepted);
+    notifyListeners();
+  }
+
+  Future<void> clearTakebackRejection() async {
+    _takebackRejected = false;
+    notifyListeners();
+  }
+
+  /// Aborts an online game before it really started. The server decides; the result arrives as a room update.
+  Future<void> abortOnlineGame() async {
+    if (!canAbortOnline) return;
+    _gameSocketService.abortGame(_onlineGameRoom!.gameId);
   }
 
   /// Clears the local draw-offer-rejection flag. There's no corresponding
@@ -647,8 +798,20 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
+  bool _disposed = false;
+
+  /// Timers, sockets and the engine can fire after the provider is gone; notifying then throws.
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
+    _searchKeepAliveTimer?.cancel();
+    _coachClearTimer?.cancel();
     disposeStockfish();
     _stopTimers();
     _stopAudioPlayer(); // Stop any playing audio
@@ -663,8 +826,24 @@ class GameProvider extends ChangeNotifier {
     _socketGameUpdateSub?.cancel();
     _socketOpponentMoveSub?.cancel();
     _socketGameEndedSub?.cancel();
+    _socketOppDisconnectedSub?.cancel();
+    _socketOppReconnectedSub?.cancel();
+    _socketPresenceSub?.cancel();
+    _socketConnectionSub?.cancel();
     _gameSocketService.dispose();
     super.dispose();
+  }
+
+  /// Reads `data['room']` from a socket event; null (instead of a crash) if it is missing or malformed.
+  GameRoom? _roomFromEvent(dynamic data) {
+    try {
+      final raw = (data as Map)['room'];
+      if (raw is! Map) return null;
+      return GameRoom.fromSocketJson(Map<String, dynamic>.from(raw));
+    } catch (e) {
+      _logger.e('Ignoring malformed room event: $e');
+      return null;
+    }
   }
 
   /// Connects the game socket (if not already) and wires its event streams
@@ -675,23 +854,58 @@ class GameProvider extends ChangeNotifier {
 
     _socketGameStartSub?.cancel();
     _socketGameStartSub = _gameSocketService.onGameStart.listen((data) {
-      final room = GameRoom.fromSocketJson(Map<String, dynamic>.from(data['room']));
+      final room = _roomFromEvent(data);
+      if (room == null) return;
       _applyNewOnlineGameRoom(room);
     });
 
     _socketGameUpdateSub?.cancel();
     _socketGameUpdateSub = _gameSocketService.onGameUpdate.listen((data) {
-      onOnlineGameRoomUpdate(GameRoom.fromSocketJson(Map<String, dynamic>.from(data['room'])));
+      final room = _roomFromEvent(data);
+      if (room != null) onOnlineGameRoomUpdate(room);
     });
 
     _socketOpponentMoveSub?.cancel();
     _socketOpponentMoveSub = _gameSocketService.onOpponentMove.listen((data) {
-      onOnlineGameRoomUpdate(GameRoom.fromSocketJson(Map<String, dynamic>.from(data['room'])));
+      final room = _roomFromEvent(data);
+      if (room != null) onOnlineGameRoomUpdate(room);
     });
 
     _socketGameEndedSub?.cancel();
     _socketGameEndedSub = _gameSocketService.onGameEnded.listen((data) {
-      onOnlineGameRoomUpdate(GameRoom.fromSocketJson(Map<String, dynamic>.from(data['room'])));
+      final room = _roomFromEvent(data);
+      if (room != null) onOnlineGameRoomUpdate(room);
+    });
+
+    // Opponent presence: only events about the OPPONENT change the dot.
+    _socketOppDisconnectedSub?.cancel();
+    _socketOppDisconnectedSub = _gameSocketService.onOpponentDisconnected.listen((data) {
+      final id = data['userId']?.toString();
+      if (id != null && id == _opponentUserId) _setOpponentOnline(false);
+    });
+
+    _socketOppReconnectedSub?.cancel();
+    _socketOppReconnectedSub = _gameSocketService.onOpponentReconnected.listen((data) {
+      final id = data['userId']?.toString();
+      if (id != null && id == _opponentUserId) _setOpponentOnline(true);
+    });
+
+    _socketPresenceSub?.cancel();
+    _socketPresenceSub = _gameSocketService.onPresence.listen((data) {
+      final id = data['userId']?.toString();
+      if (id != null && id == _opponentUserId) _setOpponentOnline(data['online'] == true);
+    });
+
+    // If OUR connection drops we cannot know the opponent's state: show grey until the
+    // server re-confirms it after we rejoin (it sends `game:presence` on every rejoin).
+    _socketConnectionSub?.cancel();
+    _socketConnectionSub = _gameSocketService.onConnectionChanged.listen((connected) {
+      if (!_isOnlineGame) return;
+      if (!connected) {
+        _setOpponentOnline(false);
+      } else {
+        if (_gameId.isNotEmpty) _gameSocketService.requestPresence(_gameId);
+      }
     });
   }
 
@@ -700,23 +914,70 @@ class GameProvider extends ChangeNotifier {
   /// a freshly-created rematch room. Mirrors the setup block that used to
   /// live inline in `startOnlineGameSearch` after finding/creating a
   /// Firestore game room.
+  // Incremented whenever a *different* online game replaces the previous one
+  // (rematch). The game screen watches it to close the old "game over" dialog.
+  int _newGameCounter = 0;
+  int get newGameCounter => _newGameCounter;
+
+  /// Clears everything that belongs to ONE game, so a rematch starts clean.
+  /// (Without this, "game over already handled" stayed true and the second
+  /// game's result was never saved or reported.)
+  void _resetPerGameState() {
+    _flipBoard = false; // a flip from the last game must not carry into this one
+    _scoresUpdatedForCurrentGame = false;
+    _gameOverProcessed = false;
+    _rematchPending = false;
+    _rematchOfferSent = false;
+    _drawOfferReceived = false;
+    _drawOfferRejected = false;
+    _stopTimers();
+    _gameResultNotifier.value = null;
+    _whiteCapturedPieces.clear();
+    _blackCapturedPieces.clear();
+    _moveHistory.clear();
+    _fenHistory.clear();
+    _playedTimerSounds.clear();
+    _undoCount = 0;
+  }
+
   void _applyNewOnlineGameRoom(GameRoom room) {
+    final replacesPreviousGame =
+        _onlineGameRoom != null && _onlineGameRoom!.gameId != room.gameId;
+    _resetPerGameState();
+    if (replacesPreviousGame) _newGameCounter++;
     _onlineGameRoom = room;
+    _isOpponentOnline = true; // both players were just matched; resume/rejoin will correct this
     _gameId = room.gameId;
+    _gameSocketService.setActiveGame(room.gameId);
+    _gameSocketService.requestPresence(room.gameId);
     _isHost = room.player1Id == (_currentUserIdForSocket ?? '');
     _player = _isHost ? Squares.white : Squares.black;
     _isOnlineGame = true;
+
+    // The server may have matched us in a different accepted mode than the one we tapped,
+    // so the clock rules (bonus / per-move) must follow the ROOM's mode.
+    if (room.gameMode.isNotEmpty && room.gameMode != 'Unknown') {
+      _selectedTimeControl = room.gameMode;
+      _parseTimeControl(room.gameMode);
+    }
 
     _whitesTime = Duration(milliseconds: room.whitesTimeRemaining);
     _blacksTime = Duration(milliseconds: room.blacksTimeRemaining);
     _player1OnlineScore = room.player1Score;
     _player2OnlineScore = room.player2Score;
 
-    _game = bishop.Game(fen: room.fen);
+    // room.fen is the CURRENT position. With moves already played (resumed game) rebuild from the
+    // standard start and replay them; replaying them on top of the current FEN corrupted the board.
+    _game = room.moves.isEmpty
+        ? bishop.Game(fen: room.fen)
+        : bishop.Game(variant: bishop.Variant.standard());
     _state = _game.squaresState(_player);
     for (var moveString in room.moves) {
-      _game.makeSquaresMove(_convertMoveStringToMove(moveString: moveString));
+      final move = _convertMoveStringToMove(moveString: moveString);
+      _game.makeSquaresMove(move);
+      _moveHistory.add(_getMoveNotation(move));
     }
+    if (room.moves.isNotEmpty) _state = _game.squaresState(_player);
 
     if (room.status == Constants.statusActive &&
         ((_isHost && _game.state.turn == Squares.white) ||
@@ -863,9 +1124,14 @@ class GameProvider extends ChangeNotifier {
     if (_game.state.turn == Squares.white) {
       _playWhitesTimer = true;
       _playBlacksTimer = false;
+      // Time is measured against the wall clock, not by counting ticks: a paused
+      // or throttled timer (app in background) must not give free time.
+      final whitesBase = _whitesTime;
+      final whitesStartedAt = DateTime.now();
       _whitesTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_whitesTime.inSeconds > 0) {
-          _whitesTime = _whitesTime - const Duration(seconds: 1);
+        final whitesLeft = whitesBase - DateTime.now().difference(whitesStartedAt);
+        if (whitesLeft > Duration.zero) {
+          _whitesTime = whitesLeft;
 
           // Play timer tick sound when time is 10 seconds or less
           if (_whitesTime.inSeconds <= 10 && _whitesTime.inSeconds > 0) {
@@ -895,9 +1161,14 @@ class GameProvider extends ChangeNotifier {
     } else {
       _playBlacksTimer = true;
       _playWhitesTimer = false;
+      // Time is measured against the wall clock, not by counting ticks: a paused
+      // or throttled timer (app in background) must not give free time.
+      final blacksBase = _blacksTime;
+      final blacksStartedAt = DateTime.now();
       _blacksTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_blacksTime.inSeconds > 0) {
-          _blacksTime = _blacksTime - const Duration(seconds: 1);
+        final blacksLeft = blacksBase - DateTime.now().difference(blacksStartedAt);
+        if (blacksLeft > Duration.zero) {
+          _blacksTime = blacksLeft;
 
           // Play timer tick sound when time is 10 seconds or less
           if (_blacksTime.inSeconds <= 10 && _blacksTime.inSeconds > 0) {
@@ -956,12 +1227,22 @@ class GameProvider extends ChangeNotifier {
   /// Public method to stop all game activities (timers and audio)
   /// Called when leaving the game screen to prevent sounds continuing in background
   void stopGameActivity() {
+    _gameSoundsAllowed = false;
     _stopTimers();
     _stopAudioPlayer();
     _logger.i('Game activity stopped - all timers and audio halted');
   }
 
   // Reset the game state
+  /// Anonymous usage event: a game (online / cpu / local) is starting. Called by the game screen after resetGame(false).
+  void trackGameStart() {
+    final mode = _isOnlineGame ? 'online' : (_vsCPU ? 'cpu' : 'local');
+    AnalyticsService.instance.track('game_start', {
+      'mode': mode,
+      if (_isOnlineGame && _selectedTimeControl.isNotEmpty) 'timeControl': _selectedTimeControl,
+    });
+  }
+
   void resetGame(bool isNewGame) {
     _scoresUpdatedForCurrentGame = false; // Reset for the new game
     _gameOverProcessed = false; // Reset game over processing flag
@@ -1013,6 +1294,24 @@ class GameProvider extends ChangeNotifier {
     }
 
     _game = bishop.Game(variant: bishop.Variant.standard());
+
+    // An online game may already have moves by the time the game screen calls this (a fast
+    // opponent, a slow screen). Wiping the board then would lose them, so rebuild from the
+    // server's move list instead of starting from an empty board.
+    if (_isOnlineGame && !isNewGame && _onlineGameRoom != null && _onlineGameRoom!.moves.isNotEmpty) {
+      try {
+        for (final moveString in _onlineGameRoom!.moves) {
+          final move = _convertMoveStringToMove(moveString: moveString);
+          _game.makeSquaresMove(move);
+          _moveHistory.add(_getMoveNotation(move));
+        }
+        updateCapturedPieces();
+      } catch (e) {
+        _logger.e('Could not rebuild the online board from the room: $e');
+        _game = bishop.Game(variant: bishop.Variant.standard());
+        _moveHistory.clear();
+      }
+    }
 
     // Initialize state correctly for local multiplayer or online game
     if (_localMultiplayer || _isOnlineGame) {
@@ -1109,6 +1408,26 @@ class GameProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Anonymous statistics: one event per finished game (no moves, no names).
+  void _trackGameEnd() {
+    final r = _gameResultNotifier.value;
+    if (r == null || r is WonGameAborted) return;
+    final mode = _isOnlineGame ? 'online' : (_vsCPU ? 'cpu' : 'local');
+    String result;
+    if (r is bishop.DrawnGame) {
+      result = 'draw';
+    } else if (r is bishop.WonGame) {
+      result = _localMultiplayer ? 'decisive' : (r.winner == _player ? 'win' : 'loss');
+    } else {
+      return;
+    }
+    AnalyticsService.instance.track('game_end', {
+      'mode': mode,
+      'result': result,
+      'moves': _moveHistory.length,
+    });
+  }
+
   // Check for game over conditions
   void checkGameOver({String? userId}) {
     if (isGameOver && !_gameOverProcessed) {
@@ -1117,6 +1436,7 @@ class GameProvider extends ChangeNotifier {
       if (_gameResultNotifier.value == null) {
         _gameResultNotifier.value = _game.result;
       }
+      _trackGameEnd();
 
       // Update scores for online games when the game officially ends.
       if (_isOnlineGame && _onlineGameRoom != null) {
@@ -1134,10 +1454,14 @@ class GameProvider extends ChangeNotifier {
 
       // Save game and update user stats for all game types (not just online)
       // For local games, we'll use a placeholder userId if none provided
-      String gameUserId = userId ?? 'local_user';
-      if (gameUserId.isNotEmpty && gameUserId != 'local_user') {
+      // Online games are often finished by a server message (opponent resigned, timeout...),
+      // which arrives here WITHOUT a user id. Use the signed-in user so they are still saved.
+      String gameUserId =
+          userId ?? (_isOnlineGame ? (_currentUserIdForSocket ?? '') : '') ;
+      if (gameUserId.isEmpty) gameUserId = 'local_user';
+      if (gameUserId != 'local_user') {
         _saveCurrentGame(gameUserId);
-      } else if (_vsCPU || _localMultiplayer) {
+      } else if (_isOnlineGame || _vsCPU || _localMultiplayer) {
         // For CPU and local multiplayer games, save with a generic user ID
         // This ensures all games are tracked in the saved games collection
         _saveCurrentGame('local_user');
@@ -1206,8 +1530,10 @@ class GameProvider extends ChangeNotifier {
       _fenHistory.add(_game.fen);
     }
 
+    final fenBeforeMove = _game.fen;
     bool result = _game.makeSquaresMove(move);
     if (result) {
+      _playMoveSound(fenBeforeMove);
       // Track move in algebraic notation
       if (_game.history.isNotEmpty) {
         String moveNotation = _getMoveNotation(move);
@@ -1468,6 +1794,49 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
+  /// Practice coach: after the player's move in a game against the computer,
+  /// Stockfish (the game's own engine, at full strength for these two quick
+  /// looks) compares the position before and after the move and may set
+  /// [coachWarning]. The CPU's reply waits for it (about half a second).
+  Future<void> coachCheckMove(String fenBefore, String fenAfter) async {
+    if (!_vsCPU || !_coachEnabled || _stockfish == null || !_stockfishInitialized) return;
+    if (_aiThinking || _aiMoveRequestedForPlayer || _coachBusy) return;
+    _coachBusy = true;
+    try {
+      await waitForStockfish();
+      _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.skillLevel, 20);
+      _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.multiPV, 1);
+      final a = await _coachEval(fenBefore);
+      final b = await _coachEval(fenAfter);
+      final mark = CoachRules.verdict(a.cpWhite, b.cpWhite, CoachRules.whiteToMove(fenBefore));
+      if (mark != null && _coachEnabled) {
+        showCoachWarning(CoachWarning(mark, a.bestUci ?? ''));
+      }
+    } catch (e) {
+      _logger.e('Coach check failed: $e');
+    } finally {
+      _coachBusy = false;
+    }
+  }
+
+  Future<PositionEval> _coachEval(String fen) async {
+    if (_stockfish == null || bishop.Game(fen: fen).gameOver) {
+      return const PositionEval(null, null);
+    }
+    _coachParser.reset(CoachRules.whiteToMove(fen));
+    _coachDone = Completer<void>();
+    _stockfish!.stdin = '${UCICommands.position} $fen';
+    _stockfish!.stdin = '${UCICommands.goMoveTime} 250';
+    await _coachDone!.future.timeout(
+      const Duration(seconds: 4),
+      onTimeout: () async {
+        _stockfish?.stdin = UCICommands.stop;
+        await Future.delayed(const Duration(milliseconds: 300));
+      },
+    );
+    return PositionEval(_coachParser.cpWhite, _coachParser.best);
+  }
+
   Future<void> makeStockfishMove() async {
     if (_stockfish == null || !_stockfishInitialized) {
       _logger.i('Stockfish not initialized, skipping AI move');
@@ -1476,6 +1845,12 @@ class GameProvider extends ChangeNotifier {
 
     try {
       await waitForStockfish();
+      // A coach look at the player's move may still be running: let it finish first.
+      var coachWaits = 0;
+      while (_coachBusy && coachWaits < 60) {
+        await Future.delayed(const Duration(milliseconds: 80));
+        coachWaits++;
+      }
 
       // Check if it's AI's turn
       bool isAiTurn =
@@ -1519,7 +1894,7 @@ class GameProvider extends ChangeNotifier {
       _logger.i('Stockfish not initialized, cannot suggest a move');
       return;
     }
-    if (_aiThinking || _aiMoveRequestedForPlayer) {
+    if (_aiThinking || _aiMoveRequestedForPlayer || _coachBusy) {
       return; // already thinking (either for the CPU or for this request)
     }
 
@@ -1556,6 +1931,34 @@ class GameProvider extends ChangeNotifier {
     if (_stockfish == null) return;
 
     _stockfish!.stdout.listen((event) {
+      if (_disposed) return;
+      try {
+        _handleStockfishOutput(event);
+      } catch (e, st) {
+        _logger.e('Error handling Stockfish output: $e\n$st');
+        // Never leave the UI waiting on an engine reply that will not come.
+        _aiMoveRequestedForPlayer = false;
+        if (_aiThinking) _aiThinking = false;
+        notifyListeners();
+      }
+    });
+  }
+
+  /// Returns the move from a "bestmove e2e4 ponder ..." line, or null if there is none
+  /// (for example "bestmove (none)" when the side to move has no legal moves).
+  String? _parseBestMove(String event) {
+    final parts = event.trim().split(RegExp(r'\s+'));
+    if (parts.length < 2) return null;
+    final move = parts[1];
+    return RegExp(r'^[a-h][1-8][a-h][1-8][qrbn]?$').hasMatch(move) ? move : null;
+  }
+
+  void _handleStockfishOutput(String event) {
+    if (_coachBusy && _coachDone != null) {
+      if (_coachParser.feed(event) && !_coachDone!.isCompleted) _coachDone!.complete();
+      return;
+    }
+    {
       _logger.i('Stockfish output: $event');
 
       // Check if it's AI's turn and not already thinking
@@ -1568,14 +1971,22 @@ class GameProvider extends ChangeNotifier {
       // Handle the "AI Move" button's request (AI playing FOR the human on
       // their own turn) separately from the CPU opponent's own move above.
       if (_aiMoveRequestedForPlayer && event.contains(UCICommands.bestMove)) {
-        final suggestedMove = event.split(' ')[1];
+        final suggestedMove = _parseBestMove(event);
+        if (suggestedMove == null) {
+          // "bestmove (none)" or garbage: nothing to play, just stop waiting.
+          _aiMoveRequestedForPlayer = false;
+          notifyListeners();
+          return;
+        }
         _logger.i('AI-suggested move for player: $suggestedMove');
 
         if (_vsCPU) {
           _fenHistory.add(_game.fen);
         }
 
+        final fenBeforeAiMove = _game.fen;
         _game.makeMoveString(suggestedMove);
+        _playMoveSound(fenBeforeAiMove);
 
         if (_game.history.isNotEmpty) {
           _moveHistory.add(suggestedMove);
@@ -1618,7 +2029,12 @@ class GameProvider extends ChangeNotifier {
 
       if (isAiTurn && _aiThinking && event.contains(UCICommands.bestMove)) {
         // Extract the best move from Stockfish output
-        final bestMove = event.split(' ')[1];
+        final bestMove = _parseBestMove(event);
+        if (bestMove == null) {
+          _aiThinking = false;
+          notifyListeners();
+          return;
+        }
         _logger.i('Best move from Stockfish: $bestMove');
 
         // Store current FEN before making the CPU move (for undo functionality)
@@ -1627,7 +2043,9 @@ class GameProvider extends ChangeNotifier {
         }
 
         // Make the move in the game
+        final fenBeforeCpuMove = _game.fen;
         _game.makeMoveString(bestMove);
+        _playMoveSound(fenBeforeCpuMove);
 
         // Add the CPU's move to move history
         if (_game.history.isNotEmpty) {
@@ -1675,7 +2093,7 @@ class GameProvider extends ChangeNotifier {
         }
         notifyListeners();
       }
-    });
+    }
   }
 
   /// Initiates the online game search or creation process.
@@ -1687,6 +2105,7 @@ class GameProvider extends ChangeNotifier {
     required int userRating,
     required String gameMode,
     required bool ratingBasedSearch,
+    List<String>? acceptedModes,
     BuildContext? context,
   }) async {
     // Reset cancellation flag for new search
@@ -1725,7 +2144,12 @@ class GameProvider extends ChangeNotifier {
         );
       }
 
-      _gameSocketService.joinMatchmaking(gameMode: gameMode, ratingBasedSearch: ratingBasedSearch);
+      _gameSocketService.joinMatchmaking(
+        gameMode: gameMode,
+        ratingBasedSearch: ratingBasedSearch,
+        gameModes: acceptedModes,
+      );
+      _startSearchKeepAlive();
 
       // Set up friend request listener (opponent identity isn't known yet;
       // this re-checks once _onlineGameRoom is populated by game:start).
@@ -1759,6 +2183,8 @@ class GameProvider extends ChangeNotifier {
     String? player1PhotoUrl,
     required String playerFlag,
     required int player1Rating,
+    bool fromChat = false,
+    bool trainingMode = false,
   }) async {
     setLoading(true);
     setIsOnlineGame(true); // Set online game mode
@@ -1782,6 +2208,8 @@ class GameProvider extends ChangeNotifier {
     final room = await GameInviteService().sendInvite(
       friendId: player2Id,
       gameMode: gameMode,
+      fromChat: fromChat,
+      trainingMode: trainingMode,
     );
 
     if (room == null) {
@@ -1919,13 +2347,20 @@ class GameProvider extends ChangeNotifier {
     // Capture previous state BEFORE updating _onlineGameRoom
     final previousRematchOffer = _onlineGameRoom?.rematchOfferedBy;
 
+    final previousTakebackStatus = _onlineGameRoom?.takebackStatus;
+    final previousMoveCount = _onlineGameRoom?.moves.length ?? 0;
+    final previousStatus = _onlineGameRoom?.status;
     _onlineGameRoom = updatedRoom;
     _gameId = updatedRoom.gameId;
 
-    // Update local game state based on Firestore updates
-    // Always update times and scores, even if FEN hasn't changed (e.g., draw offer)
-    _whitesTime = Duration(milliseconds: updatedRoom.whitesTimeRemaining);
-    _blacksTime = Duration(milliseconds: updatedRoom.blacksTimeRemaining);
+    // Take the server's clock values only when a move was made or the game
+    // changed state. Other updates (draw offer, voice chat, scores) used to
+    // reset the running clock to the value from the last move.
+    if (updatedRoom.moves.length != previousMoveCount ||
+        updatedRoom.status != previousStatus) {
+      _whitesTime = Duration(milliseconds: updatedRoom.whitesTimeRemaining);
+      _blacksTime = Duration(milliseconds: updatedRoom.blacksTimeRemaining);
+    }
     _player1OnlineScore = updatedRoom.player1Score;
     _player2OnlineScore = updatedRoom.player2Score;
 
@@ -1982,29 +2417,47 @@ class GameProvider extends ChangeNotifier {
       return; // Exit early to avoid conflicting logic below
     }
 
+    // Takeback accepted: the server removed 1-2 plies. Rebuild the board from the server's move list.
+    if (updatedRoom.status == Constants.statusActive &&
+        updatedRoom.moves.length < _moveHistory.length) {
+      _logger.i('TAKEBACK: server has ${updatedRoom.moves.length} moves, we had ${_moveHistory.length}; rebuilding board');
+      _stopTimers();
+      _moveHistory.clear();
+      _game = bishop.Game(variant: bishop.Variant.standard());
+      for (final moveString in updatedRoom.moves) {
+        final move = _convertMoveStringToMove(moveString: moveString);
+        _game.makeSquaresMove(move);
+        _moveHistory.add(_getMoveNotation(move));
+      }
+      _state = _game.squaresState(_player);
+      updateCapturedPieces();
+      _drawOfferReceived = false;
+      if ((_isHost && _game.state.turn == Squares.white) ||
+          (!_isHost && _game.state.turn == Squares.black)) {
+        _startTimer();
+      }
+      notifyListeners();
+    }
+
     // Only update game board if the FEN has changed (meaning a move was made by opponent)
     if (_game.fen != updatedRoom.fen) {
       _logger.i('Updating game FEN from Firestore: ${updatedRoom.fen}');
       // Check if there's a new move (opponent's move)
       if (updatedRoom.moves.length > _moveHistory.length) {
-        // Get the latest move from the opponent
-        final latestMoveString = updatedRoom.moves.last;
-        _logger.i('Latest move from Firestore: $latestMoveString');
-        final latestMove = _convertMoveStringToMove(
-          moveString: latestMoveString,
-        );
-
-        _logger.i(
-          'Converted latest move: from ${latestMove.from} to ${latestMove.to}, '
-          'promo: ${latestMove.promo}, piece: ${latestMove.piece}',
-        );
-
-        // Apply only the new move to our local game
-        _game.makeSquaresMove(latestMove);
+        // Apply EVERY move we are missing, in order. If a message was lost (bad
+        // connection, app in the background) applying only the last move would
+        // leave the two boards permanently out of sync.
+        final missedMoves = updatedRoom.moves.sublist(_moveHistory.length);
+        _logger.i('Applying ${missedMoves.length} missing move(s) from the server');
+        var fenBeforeLastMove = _game.fen;
+        for (final moveString in missedMoves) {
+          fenBeforeLastMove = _game.fen;
+          final move = _convertMoveStringToMove(moveString: moveString);
+          _game.makeSquaresMove(move);
+          _moveHistory.add(_getMoveNotation(move));
+        }
+        _playMoveSound(fenBeforeLastMove); // one sound, for the newest move
         _state = _game.squaresState(_player);
-
-        // Update move history with the new move
-        _moveHistory.add(_getMoveNotation(latestMove));
 
         // Update captured pieces and check game over
         updateCapturedPieces();
@@ -2073,16 +2526,27 @@ class GameProvider extends ChangeNotifier {
         final winnerColor = updatedRoom.player1Id == updatedRoom.winnerId
             ? updatedRoom.player1Color
             : updatedRoom.player2Color;
-        if (winnerColor != null) {
-          _gameResultNotifier.value = WonGameResignation(winner: winnerColor);
+        if (winnerColor != null && _gameResultNotifier.value == null) {
+          // Show the REAL reason. A local checkmate keeps the board's own result
+          // (set by checkGameOver); only timeouts and resignations are set here.
+          if (updatedRoom.endReason == 'timeout') {
+            _gameResultNotifier.value = WonGameTimeout(winner: winnerColor);
+          } else if (updatedRoom.endReason == 'checkmate' && _game.gameOver) {
+            // leave null: checkGameOver() below uses _game.result (checkmate)
+          } else {
+            _gameResultNotifier.value = WonGameResignation(winner: winnerColor);
+          }
           _logger.i(
-            'ONLINE UPDATE: Game result set to resignation with winner color: $winnerColor',
+            'ONLINE UPDATE: Game ended by ${updatedRoom.endReason}, winner color: $winnerColor',
           );
         }
       } else if (updatedRoom.status == Constants.statusCompleted) {
         _logger.i('ONLINE UPDATE: Setting game result to draw');
-        // If game is completed and there's no winner, it's a draw.
-        _gameResultNotifier.value = const DrawnGameAgreement();
+        // Completed with no winner = a draw. If the board itself is a draw
+        // (stalemate, repetition, ...) keep that exact result for the dialog.
+        if (_gameResultNotifier.value == null && !_game.gameOver) {
+          _gameResultNotifier.value = const DrawnGameAgreement();
+        }
       }
       checkGameOver();
     }
@@ -2116,6 +2580,17 @@ class GameProvider extends ChangeNotifier {
         _logger.i('✓ Draw rejection flag cleared');
       }
       _drawOfferRejected = false;
+    }
+
+    // Takeback requests (same shape as draw offers)
+    _takebackReceived =
+        updatedRoom.takebackOfferedBy != null &&
+        updatedRoom.takebackOfferedBy != currentUserId &&
+        updatedRoom.takebackStatus == Constants.drawOfferStatusPending;
+    if (updatedRoom.takebackStatus == Constants.drawOfferStatusRejected &&
+        updatedRoom.takebackOfferedBy == currentUserId &&
+        previousTakebackStatus != Constants.drawOfferStatusRejected) {
+      _takebackRejected = true; // only on the change, so the message shows once
     }
 
     // Handle rematch offers from opponent
@@ -2235,31 +2710,32 @@ class GameProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Aborts the game.
-  Future<void> _abortGame() async {
-    if (!_isOnlineGame || _onlineGameRoom == null) return;
+  Timer? _searchKeepAliveTimer;
 
-    // Black wins by abortion
-    final winnerColor = _onlineGameRoom!.player1Color == Squares.white
-        ? Squares.black
-        : Squares.white;
-    _gameResultNotifier.value = WonGameAborted(winner: winnerColor);
-    _stopTimers();
-
-    final winnerId = winnerColor == _onlineGameRoom!.player1Color
-        ? _onlineGameRoom!.player1Id
-        : _onlineGameRoom!.player2Id;
-    _gameSocketService.reportGameEnd(
-      gameId: _onlineGameRoom!.gameId,
-      winnerId: winnerId,
-      reason: 'aborted',
-    );
-    checkGameOver();
-    notifyListeners();
+  /// The waiting list follows the waiting dialog: while it is open we tell the server every 3s that we are
+  /// still searching; the moment it goes away (page left, back pressed, ...) we leave the waiting list at once.
+  void _startSearchKeepAlive() {
+    _searchKeepAliveTimer?.cancel();
+    var sawDialog = false;
+    _searchKeepAliveTimer = Timer.periodic(const Duration(seconds: 3), (t) {
+      if (_disposed || _searchCancelled || _onlineGameRoom != null) {
+        t.cancel(); // cancelled, or a game was found
+        return;
+      }
+      if (LoadingDialog.isShowing) {
+        sawDialog = true;
+        _gameSocketService.matchmakingKeepAlive();
+      } else {
+        t.cancel();
+        // Dialog was open and is gone without Cancel: remove the player from the waiting list now.
+        if (sawDialog) _gameSocketService.cancelMatchmaking();
+      }
+    });
   }
 
   Future<void> cancelOnlineGameSearch({bool isFriend = false}) async {
     try {
+      _searchKeepAliveTimer?.cancel();
       // Set flag to signal that search was cancelled
       _searchCancelled = true;
 
@@ -2298,6 +2774,50 @@ class GameProvider extends ChangeNotifier {
         onCancel: showCancelButton ? () => cancelOnlineGameSearch() : null,
       );
     }
+  }
+
+  /// A snapshot of the game on the board RIGHT NOW, used by the "Review game" button so the
+  /// replay opens instantly and never depends on the upload having finished.
+  /// Returns null when there is nothing to replay (no moves played).
+  SavedGame? buildReviewSnapshot() {
+    if (_moveHistory.isEmpty) return null;
+    final startFen = _game.variant.startPosition;
+    if (startFen == null || startFen.isEmpty) return null;
+
+    String result = 'unknown';
+    String winnerColor = Constants.none;
+    final gameResult = _gameResultNotifier.value;
+    if (gameResult is bishop.WonGame) {
+      winnerColor = gameResult.winner == Squares.white ? Constants.white : Constants.black;
+      result = gameResult.winner == _player ? Constants.win : Constants.loss;
+    } else if (gameResult is bishop.DrawnGame) {
+      result = Constants.draw;
+    }
+
+    var opponentName = 'Opponent';
+    if (_isOnlineGame && _onlineGameRoom != null) {
+      opponentName = _isHost
+          ? (_onlineGameRoom!.player2DisplayName ?? 'Opponent')
+          : _onlineGameRoom!.player1DisplayName;
+    }
+
+    return SavedGame(
+      gameId: _gameId,
+      userId: _currentUserIdForSocket ?? '',
+      opponentId: '',
+      opponentDisplayName: opponentName,
+      initialFen: startFen,
+      moves: List<String>.from(_moveHistory),
+      result: result,
+      winnerColor: winnerColor,
+      gameMode: _selectedTimeControl,
+      initialWhitesTime: _savedWhitesTime.inMilliseconds,
+      initialBlacksTime: _savedBlacksTime.inMilliseconds,
+      finalWhitesTime: _whitesTime.inMilliseconds,
+      finalBlacksTime: _blacksTime.inMilliseconds,
+      createdAt: DateTime.now(),
+      playerColor: _player == Squares.white ? 'white' : 'black',
+    );
   }
 
   /// Saves the current game to Firestore and updates user statistics.
@@ -2343,13 +2863,14 @@ class GameProvider extends ChangeNotifier {
       winnerColor = Constants.none;
     }
 
+    // Take a snapshot NOW: a rematch or reset can clear these lists while the upload is in flight.
     final savedGame = SavedGame(
       gameId: _gameId.isNotEmpty ? _gameId : const Uuid().v4(),
       userId: userId,
       opponentId: opponentId,
       opponentDisplayName: opponentDisplayName,
       initialFen: _game.variant.startPosition!,
-      moves: _moveHistory,
+      moves: List<String>.from(_moveHistory),
       result: result,
       winnerColor: winnerColor,
       gameMode: _selectedTimeControl,
@@ -2358,14 +2879,30 @@ class GameProvider extends ChangeNotifier {
       finalWhitesTime: _whitesTime.inMilliseconds,
       finalBlacksTime: _blacksTime.inMilliseconds,
       createdAt: DateTime.now(),
+      playerColor: _localMultiplayer
+          ? ''
+          : (_player == Squares.white ? 'white' : 'black'),
     );
 
-    try {
-      await _savedGameService.saveGame(savedGame);
-      _logger.i('Game saved successfully to Firestore.');
+    // The same id is sent every time, so retrying can never create a duplicate.
+    var saved = false;
+    for (final wait in const [0, 2, 6]) {
+      if (wait > 0) await Future.delayed(Duration(seconds: wait));
+      try {
+        await _savedGameService.saveGame(savedGame);
+        saved = true;
+        _logger.i('Game saved successfully.');
+        break;
+      } catch (e) {
+        _logger.w('Saving the game failed (will retry): $e');
+      }
+    }
+    if (!saved) _logger.e('Could not save the game after several tries.');
 
-      // Update user statistics only for real users (not local/CPU placeholders)
-      if (userId != 'local_user' && userId != 'cpu_game_user') {
+    // Statistics are separate from saving: a failed save must not lose them.
+    // (Skipped for local/CPU placeholder users.)
+    if (userId != 'local_user' && userId != 'cpu_game_user') {
+      try {
         await _userService.updateUserStatsAfterGame(
           userId: userId,
           gameResult: result,
@@ -2374,11 +2911,11 @@ class GameProvider extends ChangeNotifier {
           opponentId: opponentId,
         );
         _logger.i('User statistics updated successfully.');
-      } else {
-        _logger.i('Skipped user stats update for local/CPU game.');
+      } catch (e) {
+        _logger.e('Failed to update user stats: $e');
       }
-    } catch (e) {
-      _logger.e('Failed to save game or update user stats: $e');
+    } else {
+      _logger.i('Skipped user stats update for local/CPU game.');
     }
   }
 

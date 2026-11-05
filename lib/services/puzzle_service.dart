@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 import '../models/puzzle_model.dart';
@@ -580,4 +581,79 @@ class PuzzleService {
       return null;
     }
   }
+
+  /// The user's LOCAL calendar date as "YYYY-MM-DD". Using the device date
+  /// (not UTC) means every user gets "their" day, whatever the timezone.
+  static String localDateKey([DateTime? now]) {
+    final d = now ?? DateTime.now();
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '${d.year}-$m-$day';
+  }
+
+  /// Today's daily puzzle (same for everyone on the same date) plus whether
+  /// this user already solved it. Returns null if it can't be loaded.
+  Future<DailyPuzzleInfo?> getDailyPuzzle() async {
+    try {
+      final dateKey = localDateKey();
+      final result = await _api.get('/puzzles/daily', query: {'date': dateKey});
+      final raw = result['puzzle'];
+      if (raw == null) return null;
+      final puzzle = _puzzleFromBackendJson(Map<String, dynamic>.from(raw as Map));
+      if (!_validatePuzzleData(puzzle)) return null;
+      _difficultyById[puzzle.id] = puzzle.difficulty;
+      return DailyPuzzleInfo(
+        dateKey: dateKey,
+        puzzle: puzzle,
+        solved: result['solved'] == true,
+      );
+    } catch (e) {
+      _logger.e('Error loading daily puzzle: $e');
+      return null;
+    }
+  }
+
+  /// Sends the player's own moves to the server, which checks them against the puzzle's
+  /// solution and only then counts the solve (progress, daily puzzle, streak and mission).
+  /// Never throws; returns true when the server accepted the moves.
+  Future<bool> solvePuzzle(String puzzleId, List<String> userMoves, String dateKey) async {
+    try {
+      await _api.post(
+        '/puzzles/$puzzleId/solve',
+        body: {'moves': userMoves, 'date': dateKey},
+      );
+      AnalyticsService.instance.track('puzzle_result', {'kind': 'daily', 'result': 'solved'});
+      return true;
+    } catch (e) {
+      _logger.e('Error saving puzzle solve: $e');
+      return false;
+    }
+  }
+
+  /// Tells the backend the user solved today's daily puzzle. Never throws.
+  /// (Older call: the server remembers it but gives no streak/mission credit. Use [solvePuzzle].)
+  Future<bool> markDailySolved(String dateKey, String puzzleId) async {
+    try {
+      await _api.post(
+        '/puzzles/daily/solve',
+        body: {'date': dateKey, 'puzzleId': puzzleId},
+      );
+      return true;
+    } catch (e) {
+      _logger.e('Error saving daily puzzle solve: $e');
+      return false;
+    }
+  }
+}
+
+/// Today's daily puzzle and the user's solved state.
+class DailyPuzzleInfo {
+  final String dateKey;
+  final PuzzleModel puzzle;
+  final bool solved;
+  const DailyPuzzleInfo({
+    required this.dateKey,
+    required this.puzzle,
+    required this.solved,
+  });
 }

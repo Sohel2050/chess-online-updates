@@ -6,12 +6,19 @@ import 'package:flutter_chess_app/providers/game_provider.dart';
 import 'package:flutter_chess_app/providers/connectivity_provider.dart';
 import 'package:flutter_chess_app/providers/user_provider.dart';
 import 'package:flutter_chess_app/providers/premium_provider.dart';
+import 'package:flutter_chess_app/providers/streak_provider.dart';
+import 'package:flutter_chess_app/providers/mission_provider.dart';
+import 'package:flutter_chess_app/providers/badge_provider.dart';
+import 'package:flutter_chess_app/screens/missions_screen.dart';
 import 'package:flutter_chess_app/screens/admin_screen.dart';
 import 'package:flutter_chess_app/screens/game_screen.dart';
+import 'package:flutter_chess_app/screens/live_games_screen.dart';
 import 'package:flutter_chess_app/screens/profile_screen.dart';
 import 'package:flutter_chess_app/screens/ranking_screen.dart';
+import 'package:flutter_chess_app/screens/weekly_leaderboard_screen.dart';
 import 'package:flutter_chess_app/screens/saved_games_screen.dart';
 import 'package:flutter_chess_app/screens/statistics_screen.dart';
+import 'package:flutter_chess_app/screens/learn_screen.dart';
 import 'package:flutter_chess_app/services/user_service.dart';
 import 'package:flutter_chess_app/services/game_socket_service.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
@@ -27,6 +34,7 @@ import 'play_screen.dart';
 import 'puzzles_screen.dart';
 import 'rules_info_screen.dart';
 import 'package:flutter_chess_app/services/game_invite_service.dart';
+import 'package:flutter_chess_app/services/push_service.dart';
 
 class HomeScreen extends StatefulWidget {
   final ChessUser user;
@@ -57,9 +65,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // anywhere in the app, not only during an active game.
     GameSocketService.instance.connect();
 
+    // Push notifications for admin messages (no-op until Firebase is set up).
+    PushService.instance.registerForCurrentUser();
+
     // Initialize premium provider
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
+        context.read<StreakProvider>().refresh();
+        context.read<MissionProvider>().refresh();
+        context.read<BadgeProvider>().refreshAndCelebrate(context);
         final premiumProvider = Provider.of<PremiumProvider>(
           context,
           listen: false,
@@ -93,10 +107,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // Keep lastSeen fresh so server-side stale detection works correctly.
-  // Fires every 5 minutes while the home screen is in the foreground.
+  // Fires every 20 seconds while the home screen is in the foreground (feeds the live online counter).
   void _startHeartbeat() {
     if (widget.user.isGuest || widget.user.uid == null) return;
-    _heartbeatTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+    _heartbeatTimer?.cancel(); // never run two heartbeats at once
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 15), (_) {
       final userService = UserService();
       userService.updateUserStatusOnline(widget.user.uid!, true);
     });
@@ -127,6 +142,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.resumed:
         log('App resumed');
+        context.read<StreakProvider>().refresh(); // also rolls over at midnight
+        context.read<MissionProvider>().refresh();
+        context.read<BadgeProvider>().refreshAndCelebrate(context);
         if (!widget.user.isGuest && widget.user.uid != null) {
           userService.updateUserStatusOnline(widget.user.uid!, true);
           _startHeartbeat();
@@ -186,6 +204,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               'Game Mode: ${invite.gameMode}',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
+            if (invite.trainingMode)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Training mode: engine move warnings, unrated. Joining means you agree.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             const SizedBox(height: 12),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -415,6 +441,67 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ],
             ),
             actions: [
+              // Daily streak pill (hidden until the first load succeeds)
+              Consumer<StreakProvider>(
+                builder: (context, streakProvider, _) {
+                  final streak = streakProvider.info;
+                  if (streak == null) return const SizedBox.shrink();
+                  final color = streak.current == 0
+                      ? Colors.grey
+                      : (streak.atRisk
+                          ? const Color(0xFFF59E0B)
+                          : const Color(0xFFF97316));
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const MissionsScreen(),
+                          ),
+                        );
+                      },
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: color.withValues(alpha: 0.5)),
+                        ),
+                        child: Text(
+                          '\u{1F525} ${streak.current}',
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                          if (context.watch<MissionProvider>().state?.hasClaimable == true)
+                            Positioned(
+                              top: -2,
+                              right: -2,
+                              child: Container(
+                                width: 10,
+                                height: 10,
+                                decoration: const BoxDecoration(
+                                  color: Colors.redAccent,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
               // Friends count pill
               Padding(
                 padding: const EdgeInsets.only(right: 8),
@@ -512,6 +599,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         builder: (context) => const RulesInfoScreen(),
                       ),
                     );
+                  } else if (value == 'learn') {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) => const LearnScreen(),
+                      ),
+                    );
                   } else if (value == 'stats') {
                     if (!currentUser.isGuest) {
                       Navigator.of(context).push(
@@ -534,6 +627,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         MaterialPageRoute(
                           builder: (context) =>
                               SavedGamesScreen(user: currentUser),
+                        ),
+                      );
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('This feature requires an account.'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  } else if (value == 'weekly') {
+                    if (!currentUser.isGuest) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => const WeeklyLeaderboardScreen(),
                         ),
                       );
                     } else {
@@ -567,6 +675,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     child: Text('Game Rules'),
                   ),
                   const PopupMenuItem(
+                    value: 'learn',
+                    child: Text('Learn'),
+                  ),
+                  const PopupMenuItem(
                     value: 'stats',
                     child: Text('Statistics'),
                   ),
@@ -579,26 +691,49 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     enabled: isOnline,
                     child: const Text('Rankings'),
                   ),
+                  PopupMenuItem(
+                    value: 'weekly',
+                    enabled: isOnline,
+                    child: const Text('Weekly Leaderboard'),
+                  ),
                 ],
               ),
             ],
           ),
-          body: Column(
+          body: Stack(
             children: [
-              if (!isOnline) const OfflineIndicator(),
-              Expanded(
-                child: IndexedStack(
-                  index: _selectedTab,
-                  children: [
-                    PlayScreen(user: currentUser, isVisible: _selectedTab == 0),
-                    const PuzzlesScreen(),
-                    FriendsScreen(
-                      user: currentUser,
-                      isVisible: _selectedTab == 2,
+              Column(
+                children: [
+                  if (!isOnline) const OfflineIndicator(),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _selectedTab,
+                      children: [
+                        PlayScreen(user: currentUser, isVisible: _selectedTab == 0),
+                        currentUser.isGuest
+                            ? const Center(
+                                child: Padding(
+                                  padding: EdgeInsets.all(24),
+                                  child: Text(
+                                    'Create an account to watch live games.',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              )
+                            : LiveGamesScreen(
+                                embedded: true,
+                                isVisible: _selectedTab == 1,
+                              ),
+                        const PuzzlesScreen(),
+                        FriendsScreen(
+                          user: currentUser,
+                          isVisible: _selectedTab == 3,
+                        ),
+                        OptionsScreen(user: currentUser),
+                      ],
                     ),
-                    OptionsScreen(user: currentUser),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -607,11 +742,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             indicatorColor: const Color(0xFF22C55E).withValues(alpha: 0.2),
             selectedIndex: _selectedTab,
             onDestinationSelected: (index) {
-              if (!isOnline && index == 2) {
+              if (!isOnline && (index == 1 || index == 3)) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
+                  SnackBar(
                     content: Text(
-                      'Friends tab is disabled while you are offline.',
+                      index == 1
+                          ? 'Live tab is disabled while you are offline.'
+                          : 'Friends tab is disabled while you are offline.',
                     ),
                     backgroundColor: Colors.orange,
                   ),
@@ -626,6 +763,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               NavigationDestination(
                 icon: Icon(Icons.sports_esports),
                 label: 'Play',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.live_tv),
+                label: 'Live',
               ),
               NavigationDestination(
                 icon: Icon(Icons.extension),

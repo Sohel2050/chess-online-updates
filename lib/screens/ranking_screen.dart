@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/widgets/profile_image_widget.dart';
@@ -35,6 +36,7 @@ class _RankingScreenState extends State<RankingScreen> {
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.screen('ranking');
     _scrollController.addListener(_onScroll);
     _loadEnabledGameModes();
     _loadTotalPlayerCount();
@@ -66,6 +68,7 @@ class _RankingScreenState extends State<RankingScreen> {
       );
 
       if (newUsers.isEmpty) {
+        if (!mounted) return;
         setState(() => _hasMorePages = false);
         return;
       }
@@ -149,7 +152,7 @@ class _RankingScreenState extends State<RankingScreen> {
         bottom: _isLoadingRatings
             ? const PreferredSize(
                 preferredSize: Size.fromHeight(50.0),
-                child: Center(child: CircularProgressIndicator()),
+                child: Center(child: CircularProgressIndicator.adaptive()),
               )
             : _enabledRatingTypes.isEmpty
             ? const PreferredSize(
@@ -174,7 +177,7 @@ class _RankingScreenState extends State<RankingScreen> {
         ],
       ),
       body: _isLoadingRatings
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator.adaptive())
           : _enabledRatingTypes.isEmpty
           ? const Center(child: Text('No game modes available for rankings'))
           : _buildUsersList(),
@@ -194,7 +197,7 @@ class _RankingScreenState extends State<RankingScreen> {
         if (index == _users.length) {
           return const Padding(
             padding: EdgeInsets.all(16.0),
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(child: CircularProgressIndicator.adaptive()),
           );
         }
 

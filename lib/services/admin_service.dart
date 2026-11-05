@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_chess_app/services/api_client.dart';
+import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:logger/logger.dart';
 
 /// Talks to the self-hosted Node.js backend (see /backend/routes/admin.js)
@@ -205,12 +206,30 @@ class AdminService {
 
   /// Returns just the enabled game modes, derived from getGameModeSettings.
   Future<List<Map<String, dynamic>>> getEnabledGameModes() async {
+    // Time control + title for the three built-in modes, keyed by the name the
+    // admin panel stores them under.
+    const defaults = {
+      'classical': {'title': Constants.classical, 'timeControl': '60 sec/move'},
+      'tempo': {'title': Constants.fast, 'timeControl': '30 sec/move'},
+      'blitz': {'title': Constants.blitz3, 'timeControl': '3 min + 5s bonus 3s'},
+    };
     try {
-      final result = await _api.get('/admin/game-mode-settings', withAuth: true);
-      final settings = Map<String, dynamic>.from(result['settings'] ?? {});
+      // Public route: normal players are not admins, so /admin/... would refuse them.
+      final result = await _api.get('/public/config/gameModeSettings', withAuth: false);
+      final settings = Map<String, dynamic>.from(result['value'] ?? {});
+      // Nothing saved yet by the admin => every mode is on.
+      if (settings.isEmpty) {
+        return defaults.entries
+            .map((e) => <String, dynamic>{'mode': e.key, ...e.value})
+            .toList();
+      }
       return settings.entries
           .where((e) => (e.value is Map) && (e.value['enabled'] == true))
-          .map((e) => {'mode': e.key, ...Map<String, dynamic>.from(e.value)})
+          .map((e) => <String, dynamic>{
+                'mode': e.key,
+                ...?defaults[e.key],
+                ...Map<String, dynamic>.from(e.value),
+              })
           .toList();
     } catch (e) {
       _logger.e('Failed to get enabled game modes: $e');
@@ -275,6 +294,56 @@ class AdminService {
         'message': 'Failed to update ads settings: $e',
         'timestamp': DateTime.now().toIso8601String(),
       };
+    }
+  }
+
+  /// Current ad-frequency limits (admin only).
+  Future<Map<String, dynamic>> getAdFrequency() async {
+    try {
+      final r = await _api.get('/admin/ads-settings');
+      final s = Map<String, dynamic>.from(r['settings'] ?? {});
+      return {
+        'appOpenMaxPerDay': s['appOpenMaxPerDay'] ?? 3,
+        'appOpenMinGapHours': s['appOpenMinGapHours'] ?? 4,
+        'interstitialMaxPerHour': s['interstitialMaxPerHour'] ?? 3,
+        'interstitialEveryNGameOvers': s['interstitialEveryNGameOvers'] ?? 2,
+      };
+    } catch (e) {
+      _logger.e('Failed to get ad frequency: $e');
+      return {
+        'appOpenMaxPerDay': 3,
+        'appOpenMinGapHours': 4,
+        'interstitialMaxPerHour': 3,
+        'interstitialEveryNGameOvers': 2,
+      };
+    }
+  }
+
+  /// Saves ad-frequency limits (0 = no limit). Admin only.
+  Future<bool> updateAdFrequency({
+    int? appOpenMaxPerDay,
+    double? appOpenMinGapHours,
+    int? interstitialMaxPerHour,
+    int? interstitialEveryNGameOvers,
+  }) async {
+    try {
+      final current = await _api.get('/admin/ads-settings');
+      final s = Map<String, dynamic>.from(current['settings'] ?? {});
+      if (appOpenMaxPerDay != null) s['appOpenMaxPerDay'] = appOpenMaxPerDay;
+      if (appOpenMinGapHours != null) {
+        s['appOpenMinGapHours'] = appOpenMinGapHours;
+      }
+      if (interstitialMaxPerHour != null) {
+        s['interstitialMaxPerHour'] = interstitialMaxPerHour;
+      }
+      if (interstitialEveryNGameOvers != null) {
+        s['interstitialEveryNGameOvers'] = interstitialEveryNGameOvers;
+      }
+      await _api.put('/admin/ads-settings', body: {'settings': s});
+      return true;
+    } catch (e) {
+      _logger.e('Failed to update ad frequency: $e');
+      return false;
     }
   }
 
@@ -406,6 +475,26 @@ class AdminService {
       'value': {'adGateEnabled': enabled},
     });
   }
+
+  // ---------- Contact Us (WhatsApp on/off + support email) ----------
+  // Stored in the generic admin config under "contactConfig"; readable by everyone.
+  static const _contactConfigKey = 'contactConfig';
+
+  Future<ContactConfig> getContactConfig() async {
+    try {
+      final result = await _api.get('/public/config/$_contactConfigKey', withAuth: false);
+      return ContactConfig.fromJson(Map<String, dynamic>.from(result['value'] ?? {}));
+    } catch (e) {
+      _logger.e('Error getting contact config: $e');
+      return const ContactConfig();
+    }
+  }
+
+  /// Admin-only.
+  Future<void> updateContactConfig(ContactConfig config) async {
+    await _api.put('/admin/config/$_contactConfigKey', body: {'value': config.toJson()});
+  }
+
   /// Used by regular users' screens to decide whether to show ads at all.
   static Future<bool> isAdTypeEnabled(String adType) async {
     try {
@@ -425,4 +514,34 @@ class AdminService {
   static Future<bool> areInterstitialAdsEnabled() => isAdTypeEnabled('interstitial');
   static Future<bool> areAppOpenAdsEnabled() => isAdTypeEnabled('appOpen');
   static Future<bool> areNativeAdsEnabled() => isAdTypeEnabled('native');
+}
+
+/// Contact Us settings controlled from the admin panel.
+class ContactConfig {
+  final bool whatsappEnabled;
+  final String whatsappNumber; // digits, with country code (e.g. 8801XXXXXXXXX)
+  final String email;
+
+  const ContactConfig({
+    this.whatsappEnabled = false,
+    this.whatsappNumber = '',
+    this.email = '',
+  });
+
+  factory ContactConfig.fromJson(Map<String, dynamic> j) => ContactConfig(
+        whatsappEnabled: j['whatsappEnabled'] == true,
+        whatsappNumber: (j['whatsappNumber'] ?? '').toString().trim(),
+        email: (j['email'] ?? '').toString().trim(),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'whatsappEnabled': whatsappEnabled,
+        'whatsappNumber': whatsappNumber,
+        'email': email,
+      };
+
+  /// WhatsApp number reduced to digits only (what wa.me needs).
+  String get whatsappDigits => whatsappNumber.replaceAll(RegExp(r'[^0-9]'), '');
+  bool get hasWhatsapp => whatsappEnabled && whatsappDigits.isNotEmpty;
+  bool get hasEmail => email.isNotEmpty;
 }

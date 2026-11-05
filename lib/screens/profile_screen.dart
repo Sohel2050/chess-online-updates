@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:async';
 import 'package:country_flags/country_flags.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/screens/login_screen.dart';
 import 'package:flutter_chess_app/services/user_service.dart';
@@ -10,6 +11,10 @@ import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
 import 'package:flutter_chess_app/widgets/loading_dialog.dart';
 import 'package:flutter_chess_app/widgets/main_app_button.dart';
+import 'package:flutter_chess_app/widgets/level_card.dart';
+import 'package:flutter_chess_app/providers/mission_provider.dart';
+import 'package:flutter_chess_app/providers/badge_provider.dart';
+import 'package:flutter_chess_app/widgets/badge_widgets.dart';
 import 'package:flutter_chess_app/widgets/profile_image_widget.dart';
 import 'package:flutter_chess_app/providers/user_provider.dart';
 import 'package:flutter_chess_app/providers/premium_provider.dart';
@@ -40,6 +45,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.screen('profile');
     // Get the current user from provider, fallback to widget.user
     _userProvider = Provider.of<UserProvider>(context, listen: false);
     _currentUser = _userProvider.user ?? widget.user;
@@ -49,6 +55,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
     _emailController = TextEditingController(text: _currentUser.email);
     _countryCode = _currentUser.countryCode;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<BadgeProvider>().refreshAndCelebrate(context);
+    });
 
     // Add listener for UserProvider changes
     _userProvider.addListener(_onUserChanged);
@@ -322,6 +332,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 const Divider(height: 32),
+                const LevelCard(),
+                const SizedBox(height: 16),
+                const BadgesSection(),
+                const SizedBox(height: 8),
                 _buildRatingInfo(
                   context,
                   'Classical Rating',
@@ -775,19 +789,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final confirmed = await AnimatedDialog.show<bool>(
       context: context,
       title: 'Delete Account',
+      isDestructive: true,
+      icon: Icons.delete_forever_rounded,
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-          ),
-          child: const Text('Delete'),
-        ),
+        const DialogCancelButton(),
+        const DialogDangerButton(text: 'Delete', icon: Icons.delete_rounded),
       ],
       child: const Text(
         'Are you sure you want to delete your account? This action cannot be undone.',
@@ -826,19 +832,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final confirmed = await AnimatedDialog.show<bool>(
       context: context,
       title: 'Logout',
+      icon: Icons.logout_rounded,
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
-          child: const Text('Cancel'),
-        ),
-        ElevatedButton(
-          onPressed: () => Navigator.of(context).pop(true),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.red,
-            foregroundColor: Colors.white,
-          ),
-          child: const Text('Logout'),
-        ),
+        const DialogCancelButton(),
+        const DialogDangerButton(text: 'Logout', icon: Icons.logout_rounded),
       ],
       child: const Text(
         'Are you sure you want to logout? You will lose any unsaved changes.',
@@ -851,6 +848,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       // We logout
       await userService.signOut();
+      if (mounted) {
+        await context.read<MissionProvider>().reset(); // next account starts at its own level
+        if (mounted) context.read<BadgeProvider>().reset();
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

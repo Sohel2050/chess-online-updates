@@ -1,3 +1,4 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/services/user_service.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_chess_app/widgets/animated_dialog.dart';
 
 class LoadingDialog {
   static bool _isShowing = false;
+  static bool get isShowing => _isShowing;
   static StreamSubscription? _onlineCountSubscription;
   static Timer? _cancelButtonDelayTimer;
   static late ValueNotifier<String> _messageNotifier;
@@ -51,35 +53,35 @@ class LoadingDialog {
     _showCancelButtonNotifier.value = false; // Always start hidden
     _onCancel = onCancel;
 
-    print(
+    dlog(
       '🔵 LoadingDialog.show() called - showCancelButton=$showCancelButton',
     );
-    print(
+    dlog(
       '🔵 Cancel button notifier set to: ${_showCancelButtonNotifier.value}',
     );
 
     // If cancel button should be shown, delay it
     if (showCancelButton) {
-      print('🔵 Starting 4-second timer for cancel button...');
-      print('🔵 Timer duration: $cancelButtonDelay');
+      dlog('🔵 Starting 4-second timer for cancel button...');
+      dlog('🔵 Timer duration: $cancelButtonDelay');
       _isCancelButtonDelayActive = true; // Mark that we're in delay period
       _cancelButtonDelayTimer = Timer(cancelButtonDelay, () {
-        print('🟢 Timer fired! Setting cancel button to visible');
+        dlog('🟢 Timer fired! Setting cancel button to visible');
         _isCancelButtonDelayActive = false; // Delay period is over
         if (_isShowing) {
           _showCancelButtonNotifier.value = true;
-          print(
+          dlog(
             '🟢 Cancel button notifier set to: ${_showCancelButtonNotifier.value}',
           );
         } else {
-          print(
+          dlog(
             '🟡 Dialog is no longer showing, skipping cancel button update',
           );
         }
       });
-      print('🔵 Timer object created: $_cancelButtonDelayTimer');
+      dlog('🔵 Timer object created: $_cancelButtonDelayTimer');
     } else {
-      print('🔵 showCancelButton is false, no timer scheduled');
+      dlog('🔵 showCancelButton is false, no timer scheduled');
       _isCancelButtonDelayActive = false;
     }
 
@@ -101,7 +103,7 @@ class LoadingDialog {
                     return ValueListenableBuilder<bool>(
                       valueListenable: _showCancelButtonNotifier,
                       builder: (context, isCancelButtonVisible, child) {
-                        print(
+                        dlog(
                           '🔴 Cancel button builder rebuild - isCancelButtonVisible=$isCancelButtonVisible',
                         );
                         return Column(
@@ -118,7 +120,7 @@ class LoadingDialog {
                               const SizedBox(height: 16),
                             ],
                             // Loading spinner and message
-                            const CircularProgressIndicator(),
+                            const CircularProgressIndicator.adaptive(),
                             const SizedBox(height: 16),
                             AnimatedSwitcher(
                               duration: const Duration(milliseconds: 300),
@@ -168,7 +170,7 @@ class LoadingDialog {
   }) {
     if (!_isShowing) return;
 
-    print(
+    dlog(
       '🟠 updateMessage called - showCancelButton=$showCancelButton, _isCancelButtonDelayActive=$_isCancelButtonDelayActive',
     );
 
@@ -182,11 +184,11 @@ class LoadingDialog {
     // Only update cancel button if NOT in delay period
     if (!_isCancelButtonDelayActive) {
       _showCancelButtonNotifier.value = showCancelButton;
-      print(
+      dlog(
         '🟠 Cancel button updated to: $showCancelButton (not in delay period)',
       );
     } else {
-      print('🟠 Cancel button NOT updated (still in 4-second delay period)');
+      dlog('🟠 Cancel button NOT updated (still in 4-second delay period)');
     }
 
     _onCancel = onCancel;

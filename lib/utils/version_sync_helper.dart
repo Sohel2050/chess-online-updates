@@ -1,3 +1,4 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'package:flutter_chess_app/services/version_service.dart';
 
 /// Helper functions for manual version synchronization to the backend
@@ -8,39 +9,39 @@ class VersionSyncHelper {
   /// Run once to initialize Firestore with current app version
   /// Safe to call multiple times - only creates if missing
   static Future<void> setupVersionConfigOnce() async {
-    print('📲 Setting up version config in Firestore...');
+    dlog('📲 Setting up version config in Firestore...');
     final success = await VersionService.initializeVersionConfigIfNeeded();
     if (success) {
-      print('✅ Version config initialized successfully!');
-      print('   - minimumVersion: current app version');
-      print('   - latestVersion: current app version');
-      print('   - forceUpdate: false');
+      dlog('✅ Version config initialized successfully!');
+      dlog('   - minimumVersion: current app version');
+      dlog('   - latestVersion: current app version');
+      dlog('   - forceUpdate: false');
     } else {
-      print('❌ Failed to initialize version config');
+      dlog('❌ Failed to initialize version config');
     }
   }
 
   /// Update the latest available version (non-forcing update)
   /// Use this when releasing a new version that users can optionally install
   static Future<void> releaseNewVersion(String newVersion) async {
-    print('📦 Releasing new version: $newVersion');
+    dlog('📦 Releasing new version: $newVersion');
     final success = await VersionService.updateLatestVersion(
       newVersion: newVersion,
       changelogText: '• New features\n• Bug fixes\n• Performance improvements',
       forceUpdate: false,
     );
     if (success) {
-      print('✅ Version updated successfully!');
-      print('   Users with older versions will see an optional update');
+      dlog('✅ Version updated successfully!');
+      dlog('   Users with older versions will see an optional update');
     } else {
-      print('❌ Failed to update version');
+      dlog('❌ Failed to update version');
     }
   }
 
   /// Force users to update to a specific version (emergency/security update)
   /// Use sparingly - this will block users from using the app
   static Future<void> forceUpdateToVersion(String requiredVersion) async {
-    print('🚨 FORCING update to version: $requiredVersion');
+    dlog('🚨 FORCING update to version: $requiredVersion');
     final success = await VersionService.setMinimumRequiredVersion(
       minVersion: requiredVersion,
       updateMessage:
@@ -49,35 +50,35 @@ class VersionSyncHelper {
           '• CRITICAL: Security patches\n• CRITICAL: Bug fixes\n• System stability improvements',
     );
     if (success) {
-      print('✅ Force update configured!');
-      print(
+      dlog('✅ Force update configured!');
+      dlog(
         '   All users will be blocked until they update to $requiredVersion',
       );
-      print(
+      dlog(
         '   IMPORTANT: Make sure $requiredVersion is available in app stores!',
       );
     } else {
-      print('❌ Failed to configure force update');
+      dlog('❌ Failed to configure force update');
     }
   }
 
   /// Example: Simulate a release workflow
   static Future<void> simulateReleaseWorkflow() async {
-    print('\n🔄 === VERSION SYNC WORKFLOW EXAMPLE ===\n');
+    dlog('\n🔄 === VERSION SYNC WORKFLOW EXAMPLE ===\n');
 
     // Step 1: Initialize if needed
-    print('Step 1: Initialize Firestore config');
+    dlog('Step 1: Initialize Firestore config');
     await setupVersionConfigOnce();
 
     // Step 2: Release new optional version
-    print('\nStep 2: Release new version v1.0.3 (optional)');
+    dlog('\nStep 2: Release new version v1.0.3 (optional)');
     // await releaseNewVersion('1.0.3');
 
     // Step 3: Force critical update if needed
-    print('\nStep 3: Force update to critical version (if needed)');
+    dlog('\nStep 3: Force update to critical version (if needed)');
     // await forceUpdateToVersion('1.0.5');
 
-    print('\n✅ Workflow complete!');
+    dlog('\n✅ Workflow complete!');
   }
 }
 

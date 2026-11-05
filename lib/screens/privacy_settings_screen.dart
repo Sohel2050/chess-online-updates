@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/levelplay_provider.dart';
+import '../services/analytics_service.dart';
 import '../services/consent_service.dart';
 
 /// Lets the user view and change their ad-consent choice.
@@ -14,6 +15,7 @@ class PrivacySettingsScreen extends StatefulWidget {
 class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
   bool _isLoading = true;
   AdConsentStatus _status = AdConsentStatus.unknown;
+  bool _analyticsOn = AnalyticsService.instance.enabled;
 
   @override
   void initState() {
@@ -64,7 +66,7 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Privacy Settings')),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator.adaptive())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -104,6 +106,22 @@ class _PrivacySettingsScreenState extends State<PrivacySettingsScreen> {
                   onPressed: () => _set(false),
                   icon: const Icon(Icons.block),
                   label: const Text('Don\'t allow'),
+                ),
+                const SizedBox(height: 24),
+                Card(
+                  child: SwitchListTile.adaptive(
+                    secondary: const Icon(Icons.insights),
+                    title: const Text('Anonymous usage statistics'),
+                    subtitle: const Text(
+                      'Counts things like games played and puzzles solved so we can improve the app. '
+                      'No e-mail, name, chat or game content is sent. Never shared with advertisers.',
+                    ),
+                    value: _analyticsOn,
+                    onChanged: (value) async {
+                      setState(() => _analyticsOn = value);
+                      await AnalyticsService.instance.setEnabled(value);
+                    },
+                  ),
                 ),
               ],
             ),

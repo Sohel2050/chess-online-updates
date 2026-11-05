@@ -1,3 +1,4 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
@@ -39,7 +40,7 @@ class _CommunityPollScreenState extends State<CommunityPollScreen> {
 
   Widget _buildBody(PollProvider pollProvider) {
     if (pollProvider.isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator.adaptive());
     }
 
     if (pollProvider.error != null) {
@@ -83,7 +84,7 @@ class _CommunityPollScreenState extends State<CommunityPollScreen> {
       );
     }
 
-    print('hasVoted: ${pollProvider.hasVoted}');
+    dlog('hasVoted: ${pollProvider.hasVoted}');
 
     return pollProvider.hasVoted
         ? _buildResultsView(pollProvider)

@@ -165,7 +165,7 @@ class _AudioAccessDialogState extends State<AudioAccessDialog> {
                     ? SizedBox(
                         width: 20,
                         height: 20,
-                        child: CircularProgressIndicator(
+                        child: CircularProgressIndicator.adaptive(
                           strokeWidth: 2,
                           valueColor: AlwaysStoppedAnimation<Color>(color),
                         ),
@@ -232,6 +232,7 @@ class _AudioAccessDialogState extends State<AudioAccessDialog> {
       // User gets audio access immediately after watching the interstitial ad
       await MonetizationService.showInterstitialAd(
         context: context,
+        gameOver: false,
         onAdClosed: () {
           // Ad was closed, grant access and close dialog
           if (mounted) {

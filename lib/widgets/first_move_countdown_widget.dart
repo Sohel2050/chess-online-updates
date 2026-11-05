@@ -1,3 +1,4 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:squares/squares.dart';
@@ -63,7 +64,7 @@ class _FirstMoveCountdownWidgetState extends State<FirstMoveCountdownWidget> {
     _timer?.cancel();
     _playedTimerSounds.clear(); // Clear played sounds for new countdown
     final playerName = widget.playerToMove == Squares.white ? 'White' : 'Black';
-    print('⏱️ COUNTDOWN START: $playerName player - 30 seconds');
+    dlog('⏱️ COUNTDOWN START: $playerName player - 30 seconds');
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
@@ -80,7 +81,7 @@ class _FirstMoveCountdownWidgetState extends State<FirstMoveCountdownWidget> {
 
         if (_remainingSeconds <= 0) {
           _stopCountdown();
-          print('⏱️ COUNTDOWN TIMEOUT: $playerName - timeout triggered');
+          dlog('⏱️ COUNTDOWN TIMEOUT: $playerName - timeout triggered');
           widget.onTimeout?.call();
         }
       }
@@ -91,7 +92,7 @@ class _FirstMoveCountdownWidgetState extends State<FirstMoveCountdownWidget> {
     _timer?.cancel();
     _timer = null;
     _playedTimerSounds.clear();
-    print('⏱️ COUNTDOWN STOP');
+    dlog('⏱️ COUNTDOWN STOP');
   }
 
   @override
@@ -104,7 +105,7 @@ class _FirstMoveCountdownWidgetState extends State<FirstMoveCountdownWidget> {
   Widget build(BuildContext context) {
     if (!widget.isVisible || _remainingSeconds <= 0) {
       if (widget.isVisible) {
-        print(
+        dlog(
           '⏱️ COUNTDOWN WIDGET: Hidden (remainingSeconds=$_remainingSeconds)',
         );
       }
@@ -116,7 +117,7 @@ class _FirstMoveCountdownWidgetState extends State<FirstMoveCountdownWidget> {
         ? Colors.orange
         : Colors.red;
 
-    print(
+    dlog(
       '⏱️ COUNTDOWN WIDGET: Showing for $playerName - $_remainingSeconds seconds remaining',
     );
 

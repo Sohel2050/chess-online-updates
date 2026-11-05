@@ -13,11 +13,18 @@ class GameInviteService {
   /// Sends a private-game invite to a friend. Returns the created room's
   /// `roomCode` (also embedded in the returned GameRoom), which the friend
   /// uses to join once they accept.
-  Future<GameRoom?> sendInvite({required String friendId, required String gameMode}) async {
+  Future<GameRoom?> sendInvite({
+    required String friendId,
+    required String gameMode,
+    bool fromChat = false,
+    bool trainingMode = false,
+  }) async {
     try {
       final result = await _api.post('/games/invite', body: {
         'friendId': friendId,
         'gameMode': gameMode,
+        if (fromChat) 'fromChat': true,
+        if (trainingMode) 'trainingMode': true,
       });
       return GameRoom.fromSocketJson(Map<String, dynamic>.from(result['room']));
     } catch (e) {
@@ -47,12 +54,35 @@ class GameInviteService {
     }
   }
 
+  /// One-off fetch of the invites addressed to you.
+  Future<List<GameRoom>> fetchInvites() async {
+    final result = await _api.get('/games/invites');
+    return (result['invites'] as List)
+        .map((j) => GameRoom.fromSocketJson(Map<String, dynamic>.from(j)))
+        .toList();
+  }
+
   Future<void> declineInvite(String gameId) async {
     try {
       await _api.delete('/games/invites/$gameId');
     } catch (e) {
       _logger.e('Error declining game invite: $e');
       rethrow;
+    }
+  }
+
+  /// Friends part of watching: [enabled] is the Friends switch, [friendIds] the exact list of friends
+  /// allowed to watch. Either may be omitted to leave it unchanged. Returns false on failure.
+  Future<bool> setWatchFriends(String gameId, {bool? enabled, List<String>? friendIds}) async {
+    try {
+      await _api.post('/games/$gameId/watch-friends', body: {
+        if (enabled != null) 'enabled': enabled,
+        if (friendIds != null) 'friendIds': friendIds,
+      });
+      return true;
+    } catch (e) {
+      _logger.e('Error updating who can watch: $e');
+      return false;
     }
   }
 }

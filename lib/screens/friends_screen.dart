@@ -1,3 +1,5 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/providers/game_provider.dart';
@@ -51,7 +53,7 @@ class _FriendsScreenState extends State<FriendsScreen>
   @override
   void initState() {
     super.initState();
-    print("FriendsScreen initialized");
+    dlog("FriendsScreen initialized");
     _tabController = TabController(
       initialIndex: widget.initialTabIndex,
       length: 4,
@@ -100,19 +102,19 @@ class _FriendsScreenState extends State<FriendsScreen>
   //     size: AdSize.banner,
   //     listener: BannerAdListener(
   //       onAdLoaded: (ad) {
-  //         print('Banner ad loaded.');
+  //         dlog('Banner ad loaded.');
   //         _hasLoadedAd = true;
   //       },
   //       onAdFailedToLoad: (ad, error) {
   //         ad.dispose();
-  //         print('Banner ad failed to load: $error');
+  //         dlog('Banner ad failed to load: $error');
   //       },
-  //       onAdOpened: (ad) => print('Banner ad opened.'),
+  //       onAdOpened: (ad) => dlog('Banner ad opened.'),
   //       onAdClosed: (ad) {
   //         ad.dispose();
-  //         print('Banner ad closed.');
+  //         dlog('Banner ad closed.');
   //       },
-  //       onAdImpression: (ad) => print('Banner ad impression.'),
+  //       onAdImpression: (ad) => dlog('Banner ad impression.'),
   //     ),
   //   )..load();
   // }
@@ -127,6 +129,7 @@ class _FriendsScreenState extends State<FriendsScreen>
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _tabController.dispose();
     _searchController.dispose();
     //_disposeBannerAd();
@@ -134,21 +137,39 @@ class _FriendsScreenState extends State<FriendsScreen>
     super.dispose();
   }
 
-  void _searchUsers(String query) async {
-    if (query.isEmpty) {
+  Timer? _searchDebounce;
+  int _searchRequestId = 0;
+
+  /// Waits until the person stops typing (400 ms) before asking the server, and
+  /// ignores answers that arrive late for text they have already changed.
+  void _searchUsers(String query) {
+    _searchDebounce?.cancel();
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      _searchRequestId++; // invalidate anything still in flight
       setState(() {
         _searchResults = [];
         _isSearching = false;
       });
       return;
     }
-    setState(() {
-      _isSearching = true;
-    });
-    final results = await _friendService.searchUsers(query, widget.user.uid!);
-    setState(() {
-      _searchResults = results;
-      _isSearching = false;
+    setState(() => _isSearching = true);
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () async {
+      final requestId = ++_searchRequestId;
+      try {
+        final results = await _friendService.searchUsers(trimmed, widget.user.uid!);
+        if (!mounted || requestId != _searchRequestId) return; // stale answer
+        setState(() {
+          _searchResults = results;
+          _isSearching = false;
+        });
+      } catch (_) {
+        if (!mounted || requestId != _searchRequestId) return;
+        setState(() {
+          _searchResults = [];
+          _isSearching = false;
+        });
+      }
     });
   }
 
@@ -249,7 +270,7 @@ class _FriendsScreenState extends State<FriendsScreen>
         stream: _friendService.getFriends(widget.user.uid!),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(child: CircularProgressIndicator.adaptive());
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(child: Text('You have no friends yet.'));
@@ -327,7 +348,7 @@ class _FriendsScreenState extends State<FriendsScreen>
         stream: _friendService.getFriendRequests(widget.user.uid!),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(child: CircularProgressIndicator.adaptive());
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(child: Text('No new friend requests.'));
@@ -399,7 +420,7 @@ class _FriendsScreenState extends State<FriendsScreen>
             ),
             const SizedBox(height: 10),
             if (_isSearching)
-              const CircularProgressIndicator()
+              const CircularProgressIndicator.adaptive()
             else if (_searchResults.isNotEmpty)
               Expanded(
                 child: ListView.builder(
@@ -474,20 +495,39 @@ class _FriendsScreenState extends State<FriendsScreen>
   }
 
   void _showInviteDialog(ChessUser friend) async {
+    bool training = false;
     await AnimatedDialog.show(
       context: context,
       title: 'Invite ${friend.displayName} to a game',
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: Constants.gameModes.map((mode) {
-          return ListTile(
-            title: Text(mode['title'] as String),
-            onTap: () {
-              Navigator.of(context).pop();
-              _createPrivateGame(friend, mode['timeControl'] as String);
-            },
-          );
-        }).toList(),
+      child: StatefulBuilder(
+        builder: (context, setLocal) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Training mode'),
+              subtitle: const Text(
+                'Engine move warnings for both of you. The game is unrated. '
+                'Your friend agrees by joining.',
+              ),
+              value: training,
+              onChanged: (v) => setLocal(() => training = v),
+            ),
+            ...Constants.gameModes.map((mode) {
+              return ListTile(
+                title: Text(mode['title'] as String),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _createPrivateGame(
+                    friend,
+                    mode['timeControl'] as String,
+                    trainingMode: training,
+                  );
+                },
+              );
+            }),
+          ],
+        ),
       ),
     );
   }
@@ -496,14 +536,13 @@ class _FriendsScreenState extends State<FriendsScreen>
     await AnimatedDialog.show(
       context: context,
       title: 'Remove ${friend.displayName}?',
+      isDestructive: true,
+      icon: Icons.person_remove_rounded,
       actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: const Text('Cancel'),
-        ),
-        TextButton(
+        const DialogCancelButton(),
+        DialogDangerButton(
+          text: 'Remove',
+          icon: Icons.person_remove_rounded,
           onPressed: () {
             Navigator.of(context).pop();
             _friendService.removeFriend(
@@ -511,10 +550,9 @@ class _FriendsScreenState extends State<FriendsScreen>
               friendUserId: friend.uid!,
             );
           },
-          child: const Text('Remove'),
         ),
       ],
-      child: Text(
+child: Text(
         'Are you sure you want to remove ${friend.displayName} from your friends list?',
       ),
     );
@@ -524,14 +562,13 @@ class _FriendsScreenState extends State<FriendsScreen>
     await AnimatedDialog.show(
       context: context,
       title: 'Block ${friend.displayName}?',
+      isDestructive: true,
+      icon: Icons.block_rounded,
       actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: const Text('Cancel'),
-        ),
-        TextButton(
+        const DialogCancelButton(),
+        DialogDangerButton(
+          text: 'Block',
+          icon: Icons.block_rounded,
           onPressed: () {
             Navigator.of(context).pop();
             _friendService.blockUser(
@@ -539,10 +576,9 @@ class _FriendsScreenState extends State<FriendsScreen>
               userIdToBlock: friend.uid!,
             );
           },
-          child: const Text('Block'),
         ),
       ],
-      child: Text(
+child: Text(
         'Are you sure you want to block ${friend.displayName} from your friends list?',
       ),
     );
@@ -556,7 +592,7 @@ class _FriendsScreenState extends State<FriendsScreen>
         stream: _friendService.getBlockedUsers(widget.user.uid!),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(child: CircularProgressIndicator.adaptive());
           }
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return const Center(child: Text('You have no blocked users.'));
@@ -612,7 +648,7 @@ class _FriendsScreenState extends State<FriendsScreen>
     );
   }
 
-  void _createPrivateGame(ChessUser friend, String gameMode) async {
+  void _createPrivateGame(ChessUser friend, String gameMode, {bool trainingMode = false}) async {
     final gameProvider = context.read<GameProvider>();
 
     gameProvider.setLoading(true);
@@ -632,6 +668,7 @@ class _FriendsScreenState extends State<FriendsScreen>
         player1PhotoUrl: widget.user.photoUrl,
         playerFlag: widget.user.countryCode ?? '',
         player1Rating: widget.user.classicalRating,
+        trainingMode: trainingMode,
       );
 
       if (mounted) {

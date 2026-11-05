@@ -28,11 +28,28 @@ class GameRoom {
   final int player1Score;
   final int player2Score;
   final String? winnerId;
+  final String? endReason; // how the game ended: checkmate, timeout, resignation, draw...
   final String? drawOfferedBy; // UID of the player who offered a draw
   final String? drawOfferStatus; // "pending", "accepted", or "rejected"
+  final String? takebackOfferedBy; // UID of the player asking to take back their last move
+  final String? takebackStatus; // "pending", "accepted", or "rejected"
   final String? rematchOfferedBy; // UID of the player who offered a rematch
   final bool isPrivate;
+  final bool trainingMode; // friends agreed to engine warnings; unrated
   final String? spectatorLink;
+
+  /// Live watching: OFF = only the two players; ON = every user can watch and react.
+  final bool publicWatch;
+
+  /// Friends switch + the friends allowed to watch while it is ON.
+  final bool friendsWatch;
+
+  /// Players who switched emoji reactions OFF in this game.
+  final List<String> reactionsMuted;
+  final List<String> spectatorInvitedIds;
+
+  /// Reactions each player RECEIVED: { playerId: { 'like': 3, 'love': 1 } }.
+  final Map<String, Map<String, int>> reactionCounts;
 
   // Audio room fields
   final String audioRoomStatus; // none, invite_pending, active, declined, ended
@@ -71,11 +88,20 @@ class GameRoom {
     required this.player1Score,
     required this.player2Score,
     this.winnerId,
+    this.endReason,
     this.drawOfferedBy,
     this.drawOfferStatus,
+    this.takebackOfferedBy,
+    this.takebackStatus,
     this.rematchOfferedBy,
     this.isPrivate = false,
+    this.trainingMode = false,
     this.spectatorLink,
+    this.publicWatch = false,
+    this.friendsWatch = false,
+    this.reactionsMuted = const [],
+    this.spectatorInvitedIds = const [],
+    this.reactionCounts = const {},
     this.audioRoomStatus = Constants.audioStatusNone,
     this.audioRoomInvitedBy,
     this.audioRoomParticipants = const [],
@@ -114,6 +140,8 @@ class GameRoom {
       Constants.fieldWinnerId: winnerId,
       Constants.fieldDrawOfferedBy: drawOfferedBy,
       Constants.fieldDrawOfferStatus: drawOfferStatus,
+      'takebackOfferedBy': takebackOfferedBy,
+      'takebackStatus': takebackStatus,
       Constants.fieldRematchOfferedBy: rematchOfferedBy,
       Constants.fieldIsPrivate: isPrivate,
       Constants.fieldSpectatorLink: spectatorLink,
@@ -164,6 +192,8 @@ class GameRoom {
       winnerId: map[Constants.fieldWinnerId],
       drawOfferedBy: map[Constants.fieldDrawOfferedBy],
       drawOfferStatus: map[Constants.fieldDrawOfferStatus],
+      takebackOfferedBy: map['takebackOfferedBy'],
+      takebackStatus: map['takebackStatus'],
       rematchOfferedBy: map[Constants.fieldRematchOfferedBy],
       isPrivate: map[Constants.fieldIsPrivate] ?? false,
       spectatorLink: map[Constants.fieldSpectatorLink],
@@ -181,6 +211,22 @@ class GameRoom {
   /// Builds a GameRoom from the backend's Socket.IO/REST JSON (MongoDB
   /// document shape) instead of a Firestore snapshot map. Used by
   /// GameProvider's socket event handlers.
+  /// Parses the server's `{ playerId: { emojiKey: count } }` map.
+  static Map<String, Map<String, int>> parseReactionCounts(dynamic raw) {
+    final out = <String, Map<String, int>>{};
+    if (raw is Map) {
+      raw.forEach((player, emojis) {
+        if (emojis is Map) {
+          out[player.toString()] = {
+            for (final e in emojis.entries)
+              e.key.toString(): (e.value is num) ? (e.value as num).toInt() : 0,
+          };
+        }
+      });
+    }
+    return out;
+  }
+
   factory GameRoom.fromSocketJson(Map<String, dynamic> json) {
     DateTime? parseDate(dynamic v) => v == null ? null : DateTime.tryParse(v.toString());
     return GameRoom(
@@ -216,11 +262,20 @@ class GameRoom {
       player1Score: json['player1Score'] ?? 0,
       player2Score: json['player2Score'] ?? 0,
       winnerId: json['winnerId'],
+      endReason: json['endReason'] as String?,
       drawOfferedBy: json['drawOfferedBy'],
       drawOfferStatus: json['drawOfferStatus'],
+      takebackOfferedBy: json['takebackOfferedBy'],
+      takebackStatus: json['takebackStatus'],
       rematchOfferedBy: json['rematchOfferedBy'],
       isPrivate: json['isPrivate'] ?? false,
+      trainingMode: json['trainingMode'] == true,
       spectatorLink: json['roomCode'],
+      publicWatch: json['publicWatch'] == true,
+      friendsWatch: json['friendsWatch'] == true,
+      reactionsMuted: List<String>.from((json['reactionsMuted'] ?? []).map((e) => e.toString())),
+      spectatorInvitedIds: List<String>.from((json['spectatorInvitedIds'] ?? []).map((e) => e.toString())),
+      reactionCounts: parseReactionCounts(json['reactionCounts']),
       audioRoomStatus: json['audioRoomStatus'] ?? Constants.audioStatusNone,
       audioRoomInvitedBy: json['audioRoomInvitedBy'],
       audioRoomParticipants: List<String>.from(json['audioRoomParticipants'] ?? []),
@@ -257,11 +312,20 @@ class GameRoom {
     int? player1Score,
     int? player2Score,
     String? winnerId,
+    String? endReason,
     String? drawOfferedBy,
     String? drawOfferStatus,
+    String? takebackOfferedBy,
+    String? takebackStatus,
     String? rematchOfferedBy,
     bool? isPrivate,
+    bool? trainingMode,
     String? spectatorLink,
+    bool? publicWatch,
+    bool? friendsWatch,
+    List<String>? reactionsMuted,
+    List<String>? spectatorInvitedIds,
+    Map<String, Map<String, int>>? reactionCounts,
     String? audioRoomStatus,
     String? audioRoomInvitedBy,
     List<String>? audioRoomParticipants,
@@ -296,11 +360,20 @@ class GameRoom {
       player1Score: player1Score ?? this.player1Score,
       player2Score: player2Score ?? this.player2Score,
       winnerId: winnerId ?? this.winnerId,
+      endReason: endReason ?? this.endReason,
       drawOfferedBy: drawOfferedBy ?? this.drawOfferedBy,
       drawOfferStatus: drawOfferStatus ?? this.drawOfferStatus,
+      takebackOfferedBy: takebackOfferedBy ?? this.takebackOfferedBy,
+      takebackStatus: takebackStatus ?? this.takebackStatus,
       rematchOfferedBy: rematchOfferedBy ?? this.rematchOfferedBy,
       isPrivate: isPrivate ?? this.isPrivate,
+      trainingMode: trainingMode ?? this.trainingMode,
       spectatorLink: spectatorLink ?? this.spectatorLink,
+      publicWatch: publicWatch ?? this.publicWatch,
+      friendsWatch: friendsWatch ?? this.friendsWatch,
+      reactionsMuted: reactionsMuted ?? this.reactionsMuted,
+      spectatorInvitedIds: spectatorInvitedIds ?? this.spectatorInvitedIds,
+      reactionCounts: reactionCounts ?? this.reactionCounts,
       audioRoomStatus: audioRoomStatus ?? this.audioRoomStatus,
       audioRoomInvitedBy: audioRoomInvitedBy ?? this.audioRoomInvitedBy,
       audioRoomParticipants:

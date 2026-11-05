@@ -54,7 +54,7 @@ class _OnlinePlayersCountWidgetState extends State<OnlinePlayersCountWidget> {
             final stats = snapshot.data;
             final online = stats?['online'] ?? 0;
             final waiting = stats?['waiting'] ?? 0;
-            final playing = stats?['playing'] ?? 0;
+            final games = stats?['games'] ?? 0;
             final isLoading =
                 snapshot.connectionState == ConnectionState.waiting &&
                 !snapshot.hasData;
@@ -93,8 +93,8 @@ class _OnlinePlayersCountWidgetState extends State<OnlinePlayersCountWidget> {
                 const SizedBox(width: 10),
                 _StatChip(
                   icon: Icons.sports_esports,
-                  count: playing,
-                  label: 'Playing',
+                  count: games,
+                  label: 'Games',
                   color: onContainer,
                 ),
               ],

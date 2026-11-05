@@ -1,6 +1,8 @@
 import 'dart:developer';
 
+import 'package:flutter_chess_app/services/sound_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/widgets/floating_message_button.dart';
 import 'package:provider/provider.dart';
 import 'package:squares/squares.dart';
 import 'package:bishop/bishop.dart' as bishop;
@@ -8,6 +10,11 @@ import 'package:square_bishop/square_bishop.dart';
 import '../models/puzzle_model.dart';
 import '../providers/puzzle_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/streak_provider.dart';
+import '../providers/mission_provider.dart';
+import '../services/puzzle_service.dart';
+import '../services/rated_puzzle_service.dart';
+import '../services/personal_puzzle_service.dart';
 import '../utils/puzzle_error_handler.dart';
 import '../widgets/puzzle_completion_dialog.dart';
 import '../widgets/puzzle_loading_widget.dart';
@@ -15,7 +22,28 @@ import '../widgets/puzzle_loading_widget.dart';
 class PuzzleBoardScreen extends StatefulWidget {
   final PuzzleModel puzzle;
 
-  const PuzzleBoardScreen({super.key, required this.puzzle});
+  /// Set only when opened from the Daily Puzzle card ("YYYY-MM-DD", the
+  /// user's local date). Solving then also records the daily solve.
+  final String? dailyDateKey;
+
+  /// Set for rated play (roadmap item 8): the server's attempt id for this puzzle. The result is then
+  /// reported to /puzzles/rated/:id/result and moves the puzzle rating instead of the normal solve call.
+  final String? ratedAttemptId;
+
+  /// Theme filter of the rated session (null = all themes), used when asking for the next rated puzzle.
+  final String? ratedTheme;
+
+  /// Set when opened from "My blunders" (item 9): the solve is reported to /puzzles/mine/:id/solve.
+  final String? personalPuzzleId;
+
+  const PuzzleBoardScreen({
+    super.key,
+    required this.puzzle,
+    this.dailyDateKey,
+    this.ratedAttemptId,
+    this.ratedTheme,
+    this.personalPuzzleId,
+  });
 
   @override
   State<PuzzleBoardScreen> createState() => _PuzzleBoardScreenState();
@@ -31,11 +59,13 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
   bool _hasError = false;
   String? _errorMessage;
   bool _showVisualHint = false;
+  bool _ratedReported = false; // rated mode: the result of this puzzle is already sent
   List<int> _highlightedSquares = [];
 
   @override
   void initState() {
     super.initState();
+    FloatingMessageController.hide();
     _puzzleProvider = context.read<PuzzleProvider>();
     _initializePuzzle();
   }
@@ -85,6 +115,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         throw Exception('Failed to start puzzle session: $e');
       }
 
+      if (!mounted) return;
       setState(() {
         _isInitialized = true;
         _hasError = false;
@@ -124,11 +155,13 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
 
     try {
       // Make the move in the game
+      final fenBeforeUserMove = _game.fen;
       final success = _game.makeSquaresMove(move);
       if (!success) {
         _showIncorrectMoveMessage();
         return;
       }
+      SoundService.instance.playMove(fenBeforeUserMove, _game.fen);
 
       // Update the squares state
       // Set the board state from the player's perspective
@@ -150,6 +183,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
 
       if (isValidMove) {
         // Clear any visual hints when a correct move is made
+        if (!mounted) return;
         setState(() {
           _showVisualHint = false;
           _highlightedSquares = [];
@@ -179,6 +213,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         // Invalid move - reset the board state
         _resetBoardState();
         _showIncorrectMoveMessage();
+        _reportRatedFailure();
 
         // Don't automatically show visual hint - only show when user presses hint button
         // The solution button will be shown to allow user to see the solution if needed
@@ -343,9 +378,11 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
       // Make the opponent move using UCI notation
       try {
         // Parse the UCI move and make it
+        final fenBeforeOpponent = _game.fen;
         final success = _game.makeMoveString(opponentMoveString);
 
         if (success) {
+          SoundService.instance.playMove(fenBeforeOpponent, _game.fen);
           // Update state after opponent move
           // Set the board state from the player's perspective
           _state = _game.squaresState(_movePattern.playerColor);
@@ -431,12 +468,84 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     );
   }
 
+  bool get _isRated => widget.ratedAttemptId != null;
+  bool get _isPersonal => widget.personalPuzzleId != null;
+
+  void _showRatingChange(RatedResult result) {
+    if (!mounted) return;
+    final sign = result.delta >= 0 ? '+' : '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Puzzle rating ${result.ratingAfter}${result.provisional ? '?' : ''} ($sign${result.delta})',
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// Rated mode: the first wrong move fails the puzzle (the rating drops once). The player may still
+  /// retry or look at the solution, but it no longer changes the rating.
+  void _reportRatedFailure() {
+    if (!_isRated || _ratedReported) return;
+    _ratedReported = true;
+    RatedPuzzleService()
+        .submitResult(widget.ratedAttemptId!, solved: false)
+        .then((r) {
+      if (r != null) _showRatingChange(r);
+    });
+  }
+
   void _showPuzzleCompletedDialog() async {
     final session = _puzzleProvider.currentSession;
     if (session == null) return;
 
+    if (_isRated) {
+      // Rated: report the solve once (only if no earlier wrong move already failed it).
+      if (!_ratedReported) {
+        _ratedReported = true;
+        final ratedMission = context.read<MissionProvider>();
+        final ratedStreak = context.read<StreakProvider>();
+        RatedPuzzleService()
+            .submitResult(
+              widget.ratedAttemptId!,
+              solved: true,
+              moves: List<String>.from(session.userMoves),
+              dateKey: PuzzleService.localDateKey(),
+            )
+            .then((r) {
+          if (r != null) _showRatingChange(r);
+          ratedStreak.refresh();
+          ratedMission.refresh();
+        });
+      }
+    }
+
+    // The server checks the moves, then counts the solve for the puzzle list, the daily puzzle,
+    // the streak and the daily missions (all in this one call). Then we refresh the views.
+    final missionProvider = context.read<MissionProvider>();
+    final streakProvider = context.read<StreakProvider>();
+    if (_isPersonal) {
+      PersonalPuzzleService()
+          .solve(widget.personalPuzzleId!, List<String>.from(session.userMoves), PuzzleService.localDateKey())
+          .then((_) {
+        streakProvider.refresh();
+        missionProvider.refresh();
+      });
+    }
+    if (!_isRated && !_isPersonal) PuzzleService()
+        .solvePuzzle(
+          widget.puzzle.id,
+          List<String>.from(session.userMoves),
+          widget.dailyDateKey ?? PuzzleService.localDateKey(),
+        )
+        .then((_) {
+      streakProvider.refresh();
+      missionProvider.refresh();
+    });
+
     // Check if there's a next puzzle available
-    final hasNextPuzzle = await _hasNextPuzzle();
+    final hasNextPuzzle = _isRated ? true : (_isPersonal ? false : await _hasNextPuzzle());
 
     if (!mounted) return;
 
@@ -498,6 +607,27 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
   }
 
   Future<void> _nextPuzzle() async {
+    if (_isRated) {
+      final next = await RatedPuzzleService().nextPuzzle(theme: widget.ratedTheme);
+      if (!mounted) return;
+      if (next == null) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('No more puzzles available right now.')),
+        );
+        return;
+      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => PuzzleBoardScreen(
+            puzzle: next.puzzle,
+            ratedAttemptId: next.attemptId,
+            ratedTheme: widget.ratedTheme,
+          ),
+        ),
+      );
+      return;
+    }
     try {
       final nextPuzzle = await _puzzleProvider.nextPuzzle();
       if (nextPuzzle != null) {
@@ -549,158 +679,6 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     }
   }
 
-  void _showHintBottomSheet(String hint) {
-    final session = _puzzleProvider.currentSession;
-    if (session == null) return;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Handle bar
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Header
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Icon(
-                    Icons.lightbulb,
-                    color: Colors.amber,
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Hint ${session.hintsUsed}/${widget.puzzle.effectiveHintCount}',
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
-                      ),
-                      Text(
-                        'Puzzle hint to help you solve this position',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-
-            // Hint content
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Colors.amber.withValues(alpha: 0.3),
-                  width: 1,
-                ),
-              ),
-              child: Text(
-                hint,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodyLarge?.copyWith(height: 1.5),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Hint usage info
-            if (session.hintsUsed < widget.puzzle.effectiveHintCount)
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.info_outline,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.onPrimaryContainer,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        '${widget.puzzle.effectiveHintCount - session.hintsUsed} more hints available',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 20),
-
-            // Action buttons
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Got it'),
-                  ),
-                ),
-                if (session.hintsUsed < widget.puzzle.effectiveHintCount) ...[
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        _requestHint();
-                      },
-                      icon: const Icon(Icons.lightbulb, size: 18),
-                      label: const Text('Next Hint'),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-
-            // Add bottom padding for safe area
-            SizedBox(height: MediaQuery.of(context).padding.bottom),
-          ],
-        ),
-      ),
-    );
-  }
-
   void _playSolution() {
     // Full reset to move 0 — this is about to replay the ENTIRE solution
     // from the start, not just resume wherever the player had progressed to.
@@ -728,9 +706,11 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
 
     try {
       // Make the move
+      final fenBeforeSolutionMove = _game.fen;
       final success = _game.makeMoveString(moveString);
 
       if (success) {
+        SoundService.instance.playMove(fenBeforeSolutionMove, _game.fen);
         // Update the board state
         _state = _game.squaresState(_movePattern.playerColor);
 
@@ -746,6 +726,12 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     } catch (e) {
       debugPrint('Error playing solution move: $e');
     }
+  }
+
+  @override
+  void dispose() {
+    FloatingMessageController.show();
+    super.dispose();
   }
 
   @override
@@ -1003,7 +989,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                                 : _state.board,
                             playState: _state.state,
                             pieceSet: settingsProvider.getPieceSet(),
-                            theme: settingsProvider.boardTheme,
+                            theme: settingsProvider.effectiveBoardTheme,
                             animatePieces: settingsProvider.animatePieces,
                             labelConfig: settingsProvider.showLabels
                                 ? LabelConfig.standard
@@ -1165,11 +1151,6 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
       opponentMovesFirst: opponentMovesFirst,
       expectedUserMoves: expectedUserMoves,
     );
-  }
-
-  /// Build an overlay to highlight a square for hints
-  Widget _buildHintOverlay(int squareIndex) {
-    return _HintOverlay(squareIndex: squareIndex);
   }
 
   /// Overlay widget to highlight squares

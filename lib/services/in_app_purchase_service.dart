@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 import 'package:flutter_chess_app/services/api_client.dart';
 import 'package:flutter_chess_app/services/user_service.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
@@ -24,6 +23,9 @@ class PremiumProduct {
   final String currencyCode;
   final String period;
 
+  /// Price exactly as the store formats it for this user (e.g. "৳250.00", "€4,99").
+  final String priceLabel;
+
   PremiumProduct({
     required this.id,
     required this.title,
@@ -31,6 +33,7 @@ class PremiumProduct {
     required this.price,
     required this.currencyCode,
     required this.period,
+    this.priceLabel = '',
   });
 
   @override
@@ -47,7 +50,9 @@ class InAppPurchaseService {
   InAppPurchaseService._internal();
 
   final Logger _logger = Logger();
-  late StreamSubscription<List<PurchaseDetails>> _subscription;
+  StreamSubscription<List<PurchaseDetails>>? _subscription;
+  Future<void>? _initFuture;
+  List<PremiumProduct>? _lastProducts;
   final StreamController<List<PremiumProduct>> _productsController =
       StreamController<List<PremiumProduct>>.broadcast();
   final StreamController<bool> _purchaseStatusController =
@@ -56,8 +61,19 @@ class InAppPurchaseService {
   bool _isAvailable = false;
   bool _isInitialized = false;
 
-  /// Stream of available premium products
-  Stream<List<PremiumProduct>> get productsStream => _productsController.stream;
+  /// Stream of available premium products. A new listener immediately gets the
+  /// products already loaded (they used to be lost when the screen subscribed
+  /// after the load had finished, so the shop opened empty).
+  Stream<List<PremiumProduct>> get productsStream async* {
+    final cached = _lastProducts;
+    if (cached != null) yield cached;
+    yield* _productsController.stream;
+  }
+
+  void _emitProducts(List<PremiumProduct> products) {
+    _lastProducts = products;
+    if (!_productsController.isClosed) _productsController.add(products);
+  }
 
   /// Stream of purchase status updates
   Stream<bool> get purchaseStatusStream => _purchaseStatusController.stream;
@@ -66,7 +82,15 @@ class InAppPurchaseService {
   bool get isAvailable => _isAvailable;
 
   /// Initialize the in-app purchase service
-  Future<void> init() async {
+  Future<void> init() {
+    // Concurrent callers share ONE initialisation (no duplicate listeners).
+    return _initFuture ??= _init().catchError((Object e) {
+      _initFuture = null; // allow a retry after a failure
+      throw e;
+    });
+  }
+
+  Future<void> _init() async {
     if (_isInitialized) {
       _logger.i('In-App Purchase service already initialized');
       return;
@@ -83,7 +107,7 @@ class InAppPurchaseService {
         'This may be because: 1) Running on emulator, 2) Google Play Services not available, 3) Device restrictions',
       );
       // Emit empty list so UI knows products are not available
-      _productsController.add([]);
+      _emitProducts([]);
       _isInitialized = true;
       return;
     }
@@ -95,7 +119,8 @@ class InAppPurchaseService {
       _handlePurchaseUpdates,
       onDone: () {
         _logger.i('Purchase stream closed');
-        _subscription.cancel();
+        _subscription?.cancel();
+        _subscription = null;
       },
       onError: (error) {
         _logger.e('❌ Error in purchase stream: $error');
@@ -127,7 +152,7 @@ class InAppPurchaseService {
     if (response.error != null) {
       _logger.e('Error loading products: ${response.error}');
       // Emit empty list so UI knows products failed to load
-      _productsController.add([]);
+      _emitProducts([]);
       return;
     }
 
@@ -136,20 +161,19 @@ class InAppPurchaseService {
     final List<PremiumProduct> products = response.productDetails.map((
       details,
     ) {
-      // Remove US$ from price
-      final priceString = details.price.replaceAll('US\$', '').trim();
       _logger.i('Product: ${details.id} - ${details.title} - ${details.price}');
       return PremiumProduct(
         id: details.id,
         title: details.title,
         description: details.description,
-        price: double.tryParse(priceString) ?? 0.0,
+        price: details.rawPrice, // numeric, in the user's own currency
+        priceLabel: details.price,
         currencyCode: details.currencyCode,
         period: _getPeriodFromProductId(details.id),
       );
     }).toList();
 
-    _productsController.add(products);
+    _emitProducts(products);
     _logger.i('✅ Loaded ${products.length} premium products successfully');
     _logger.i('Products emitted to stream');
   }
@@ -173,48 +197,52 @@ class InAppPurchaseService {
           break;
 
         case PurchaseStatus.purchased:
-          _logger.i('Purchase completed for ${purchase.productID}');
+        case PurchaseStatus.restored:
+          // "restored" = bought earlier (new phone / reinstall): deliver it too.
+          _logger.i('Purchase ${purchase.status.name} for ${purchase.productID}');
           _handleSuccessfulPurchase(purchase);
           break;
 
         case PurchaseStatus.error:
-          _logger.e(
-            'Purchase error for ${purchase.productID}: ${purchase.error}',
-          );
+          _logger.e('Purchase error for ${purchase.productID}: ${purchase.error}');
+          _finishPurchaseQuietly(purchase);
           _purchaseStatusController.add(false);
           break;
 
         case PurchaseStatus.canceled:
           _logger.i('Purchase canceled for ${purchase.productID}');
+          _finishPurchaseQuietly(purchase);
           _purchaseStatusController.add(false);
           break;
-
-        default:
-          _logger.w('Unknown purchase status: ${purchase.status}');
       }
     }
   }
 
-  /// Handle a successful purchase
+  /// Tells the store we are done with a purchase (acknowledges it on Android,
+  /// finishes the transaction on iOS). Unacknowledged Android purchases are
+  /// automatically REFUNDED by Google after 3 days.
+  Future<void> _finishPurchaseQuietly(PurchaseDetails purchase) async {
+    if (!purchase.pendingCompletePurchase) return;
+    try {
+      await InAppPurchase.instance.completePurchase(purchase);
+    } catch (e) {
+      _logger.e('Could not complete purchase ${purchase.productID}: $e');
+    }
+  }
+
+  /// Handle a successful (or restored) purchase
   Future<void> _handleSuccessfulPurchase(PurchaseDetails purchase) async {
     _logger.i('Handling successful purchase for ${purchase.productID}');
 
     try {
-      // Deliver the premium features to the user
+      // 1) Give the user what they paid for. If this throws (no login, no
+      //    network...) the purchase is deliberately NOT completed, so the store
+      //    hands it to us again next time and nothing is lost.
       await _deliverPremiumFeatures(purchase);
 
-      // Mark the purchase as completed
-      if (Platform.isIOS) {
-        // On iOS, complete the transaction
-        await InAppPurchase.instance.completePurchase(purchase);
-      } else if (Platform.isAndroid) {
-        // On Android, acknowledge the purchase
-        if (!purchase.pendingCompletePurchase) {
-          await InAppPurchase.instance.completePurchase(purchase);
-        }
-      }
+      // 2) Only now tell the store we're done (acknowledge).
+      await _finishPurchaseQuietly(purchase);
 
-      // Notify listeners of successful purchase
       _purchaseStatusController.add(true);
     } catch (e) {
       _logger.e('Error handling successful purchase: $e');
@@ -228,40 +256,54 @@ class InAppPurchaseService {
 
     final uid = await ApiClient.instance.currentUserId;
     if (uid == null) {
-      _logger.e('Cannot deliver premium features, user is not logged in');
-      return;
+      // Throw (don't just log): otherwise the purchase would be completed and
+      // the customer charged without ever getting premium.
+      throw Exception('Cannot deliver premium features: user is not logged in');
     }
 
-    final now = DateTime.now();
-    DateTime expiryDate;
-
+    final Duration length;
     switch (purchase.productID) {
       case ProductIds.monthly:
-        expiryDate = now.add(const Duration(days: 30));
+        length = const Duration(days: 30);
         break;
       case ProductIds.sixMonths:
-        expiryDate = now.add(const Duration(days: 180));
+        length = const Duration(days: 180);
         break;
       case ProductIds.yearly:
-        expiryDate = now.add(const Duration(days: 365));
+        length = const Duration(days: 365);
         break;
       default:
         _logger.w('Unknown product ID: ${purchase.productID}');
         return;
     }
 
+    // The period runs from the time of the PURCHASE, not from now: restoring an
+    // old purchase must not hand out a fresh period every time.
+    final bought = int.tryParse(purchase.transactionDate ?? '');
+    final start = bought != null
+        ? DateTime.fromMillisecondsSinceEpoch(bought)
+        : DateTime.now();
+    final expiry = start.add(length);
+
     try {
-      final userService = UserService();
-      await userService.updatePremiumStatus(
+      await UserService().updatePremiumStatus(
         uid,
         true,
-        premiumStartDate: now,
-        premiumExpiryDate: expiryDate,
+        premiumStartDate: start,
+        premiumExpiryDate: expiry,
+        productId: purchase.productID,
+        purchaseToken: purchase.verificationData.serverVerificationData,
       );
       _logger.i('Successfully delivered premium features to user $uid');
+    } on ApiException catch (e) {
+      // 400 = this (restored) purchase has already run out: nothing to give.
+      if (e.statusCode == 400 && e.message.toLowerCase().contains('expired')) {
+        _logger.i('Purchase ${purchase.productID} has expired, not granting premium');
+        return;
+      }
+      rethrow;
     } catch (e) {
       _logger.e('Error delivering premium features to user $uid: $e');
-      // Optionally, re-throw the error to be handled by the caller
       rethrow;
     }
   }
@@ -339,8 +381,7 @@ class InAppPurchaseService {
 
     if (!_isAvailable) {
       _logger.w('⚠️ In-App Purchases not available, cannot refresh products');
-      // Still emit empty list to update UI
-      _productsController.add([]);
+      _emitProducts([]);
       return;
     }
 
@@ -349,16 +390,17 @@ class InAppPurchaseService {
       _logger.i('✅ Products refreshed successfully');
     } catch (e) {
       _logger.e('❌ Error refreshing products: $e');
-      // Emit empty list on error so UI knows refresh completed
-      _productsController.add([]);
+      _emitProducts([]);
     }
   }
 
-  /// Dispose of the service and clean up resources
+  /// Stops listening to the store. The service is a singleton shared by the
+  /// whole app, so its streams stay open and [init] can be called again.
   void dispose() {
-    _subscription.cancel();
-    _productsController.close();
-    _purchaseStatusController.close();
-    _logger.i('In-App Purchase service disposed');
+    _subscription?.cancel();
+    _subscription = null;
+    _initFuture = null;
+    _isInitialized = false;
+    _logger.i('In-App Purchase service stopped');
   }
 }

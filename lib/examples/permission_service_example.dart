@@ -1,3 +1,4 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'package:flutter/material.dart';
 import '../services/permission_service.dart';
 
@@ -85,9 +86,9 @@ class PermissionServiceExample {
       storage: true,
     );
 
-    print('Permission status:');
+    dlog('Permission status:');
     results.forEach((permission, granted) {
-      print('$permission: ${granted ? "granted" : "not granted"}');
+      dlog('$permission: ${granted ? "granted" : "not granted"}');
     });
   }
 

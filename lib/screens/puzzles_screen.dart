@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:provider/provider.dart';
 import '../models/puzzle_model.dart';
 import '../providers/puzzle_provider.dart';
@@ -6,6 +7,8 @@ import '../providers/user_provider.dart';
 import '../utils/puzzle_error_handler.dart';
 import '../widgets/puzzle_loading_widget.dart';
 import 'puzzle_board_screen.dart';
+import 'puzzle_rated_screen.dart';
+import 'my_blunders_screen.dart';
 
 class PuzzlesScreen extends StatefulWidget {
   const PuzzlesScreen({super.key});
@@ -18,6 +21,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
   @override
   void initState() {
     super.initState();
+    AnalyticsService.instance.screen('puzzles');
     // Use post-frame callback to avoid setState during build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -133,7 +137,30 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.emoji_events_outlined),
+                      title: const Text('Rated puzzles'),
+                      subtitle: const Text('Puzzle rating and practice by theme'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const PuzzleRatedScreen()),
+                      ),
+                    ),
+                  ),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.psychology_alt_outlined),
+                      title: const Text('My blunders'),
+                      subtitle: const Text('Puzzles from your own lost games'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const MyBlundersScreen()),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
 
                   // Difficulty cards
                   Expanded(
@@ -370,7 +397,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(),
+              CircularProgressIndicator.adaptive(),
               SizedBox(height: 16),
               Text('Loading puzzle...'),
             ],
@@ -425,6 +452,11 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
+          icon: const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFD32F2F),
+            size: 36,
+          ),
           title: const Text('Reset All Progress'),
           content: const Text(
             'Are you sure you want to reset and clear all saved puzzle progress? This action cannot be undone.',
@@ -439,8 +471,9 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
                 Navigator.of(context).pop(true);
               },
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red,
+                backgroundColor: const Color(0xFFD32F2F),
                 foregroundColor: Colors.white,
+                shape: const StadiumBorder(),
               ),
               child: const Text('Reset'),
             ),
@@ -479,7 +512,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              CircularProgressIndicator(),
+              CircularProgressIndicator.adaptive(),
               SizedBox(height: 16),
               Text('Resetting progress...'),
             ],

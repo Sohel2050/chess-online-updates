@@ -211,7 +211,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     // Login Button
                     _isLoading
-                        ? const CircularProgressIndicator()
+                        ? const CircularProgressIndicator.adaptive()
                         : MainAppButton(
                             text: 'Login',
                             icon: Icons.login,

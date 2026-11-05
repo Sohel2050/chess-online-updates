@@ -1,5 +1,7 @@
+import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/services/api_client.dart';
+import 'package:flutter_chess_app/services/push_service.dart';
 import 'package:flutter_chess_app/services/sign_in_results.dart';
 import 'package:logger/logger.dart';
 
@@ -46,14 +48,16 @@ class AuthService {
   /// working unchanged.
   String? isValidEmail(String? value) {
     if (value == null || value.trim().isEmpty) return 'Email is required';
-    final regex = RegExp(r'^[\w\.\-]+@([\w\-]+\.)+[\w\-]{2,4}$');
+    // Lenient on purpose: rejecting real addresses ("+tags", long TLDs like
+    // .store/.online) is worse than letting a typo through to the server check.
+    final regex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]{2,}$');
     if (!regex.hasMatch(value.trim())) return 'Enter a valid email';
     return null;
   }
 
   String? isValidName(String? value) {
     if (value == null || value.trim().isEmpty) return 'Name is required';
-    if (value.trim().length < 2) return 'Name is too short';
+    if (value.trim().length < 3) return 'Name must be at least 3 characters';
     return null;
   }
 
@@ -77,6 +81,20 @@ class AuthService {
     }
   }
 
+  /// GET /auth/detect-country — country guessed from the caller's IP by our own
+  /// server (offline database, nothing sent to third parties). Null if unknown.
+  Future<String?> detectCountry() async {
+    try {
+      final r = await _api.get('/auth/detect-country', withAuth: false);
+      final code = r['countryCode']?.toString();
+      return (code != null && RegExp(r'^[A-Za-z]{2}$').hasMatch(code))
+          ? code.toUpperCase()
+          : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// POST /auth/signup — replaces FirebaseAuth.createUserWithEmailAndPassword.
   Future<SignInResult> signUp(
     String email,
@@ -93,11 +111,14 @@ class AuthService {
           'displayName': displayName.trim(),
           if (countryCode != null) 'countryCode': countryCode,
         },
-        withAuth: false,
+        // Sends the current session (if any): when the user is a guest, the
+        // server upgrades THAT account, so its rating, stats and premium survive.
+        withAuth: true,
       );
       final token = response['token'] as String;
       await _api.setToken(token);
       final user = _userFromJson(Map<String, dynamic>.from(response['user']));
+      AnalyticsService.instance.track('signup', {'method': 'email'});
       return SignInSuccess(user);
     } on ApiException catch (e) {
       return SignInError(e.message);
@@ -136,6 +157,8 @@ class AuthService {
   }
 
   Future<void> signOut() async {
+    // Needs the login token, so it must run before clearToken().
+    await PushService.instance.unregister();
     await _api.clearToken();
   }
 }

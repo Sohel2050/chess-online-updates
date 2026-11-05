@@ -6,6 +6,7 @@ import 'package:logger/logger.dart';
 import '../models/monetization_config_model.dart';
 import '../models/user_model.dart';
 import '../services/levelplay_service.dart';
+import '../services/ad_frequency.dart';
 import 'premium_provider.dart';
 import 'package:provider/provider.dart';
 
@@ -73,6 +74,7 @@ class MonetizationProvider with ChangeNotifier {
       _interstitialAdsEnabled = result['interstitialAdsEnabled'] ?? true;
       _appOpenAdsEnabled = result['appOpenAdsEnabled'] ?? true;
       _nativeAdsEnabled = result['nativeAdsEnabled'] ?? true;
+      AdFrequency.applySettings(result);
 
       _logger.i(
         'Ads settings loaded: global=$_globalAdsEnabled, banner=$_bannerAdsEnabled, interstitial=$_interstitialAdsEnabled, appOpen=$_appOpenAdsEnabled, native=$_nativeAdsEnabled',
@@ -99,6 +101,7 @@ class MonetizationProvider with ChangeNotifier {
         final newInterstitialValue = result['interstitialAdsEnabled'] ?? true;
         final newAppOpenValue = result['appOpenAdsEnabled'] ?? true;
         final newNativeValue = result['nativeAdsEnabled'] ?? true;
+        AdFrequency.applySettings(result);
 
         if (_globalAdsEnabled != newGlobalValue ||
             _bannerAdsEnabled != newBannerValue ||
@@ -118,7 +121,17 @@ class MonetizationProvider with ChangeNotifier {
       }
     }
 
-    Timer.periodic(const Duration(seconds: 30), (_) => poll());
+    // One poller only: starting it again must not stack another timer.
+    _adsPollTimer?.cancel();
+    _adsPollTimer = Timer.periodic(const Duration(seconds: 60), (_) => poll());
+  }
+
+  Timer? _adsPollTimer;
+
+  @override
+  void dispose() {
+    _adsPollTimer?.cancel();
+    super.dispose();
   }
 
   /// Load monetization configuration from the backend
@@ -332,9 +345,16 @@ class MonetizationProvider with ChangeNotifier {
       return;
     }
 
+    if (!await AdFrequency.canShowAppOpen()) {
+      _logger.i('App open ad skipped: daily/gap limit');
+      onAdFailedToLoad?.call();
+      return;
+    }
+
     // LevelPlay has no dedicated app-open format, so the launch ad is an
     // interstitial.
     if (isLevelPlayEnabled) {
+      await AdFrequency.markAppOpenShown();
       _logger.i('Showing LevelPlay app launch (interstitial) ad');
       await LevelPlayService.showInterstitial(
         onAdClosed: onAdClosed,
@@ -350,6 +370,7 @@ class MonetizationProvider with ChangeNotifier {
     required BuildContext context,
     required VoidCallback onAdClosed,
     VoidCallback? onAdFailedToLoad,
+    bool gameOver = true,
   }) async {
     _logger.i(
       'DEBUG: showInterstitialAd called - globalAdsEnabled=$_globalAdsEnabled, isInitialized=$_isInitialized',
@@ -371,6 +392,12 @@ class MonetizationProvider with ChangeNotifier {
 
     if (isAdsDisabled) {
       _logger.i('DEBUG: BLOCKING INTERSTITIAL AD - Ads disabled in config');
+      onAdFailedToLoad?.call();
+      return;
+    }
+
+    if (gameOver && !await AdFrequency.shouldShowGameOverInterstitial()) {
+      _logger.i('Interstitial skipped: frequency limit');
       onAdFailedToLoad?.call();
       return;
     }

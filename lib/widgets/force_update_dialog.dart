@@ -135,13 +135,14 @@ class _ForceUpdateDialogState extends State<ForceUpdateDialog> {
                     setState(() => _isOpening = true);
                     await VersionService.openAppStore();
                     // Keep dialog showing even after opening store
+                    if (!mounted) return;
                     setState(() => _isOpening = false);
                   },
             icon: _isOpening
                 ? const SizedBox(
                     width: 16,
                     height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CircularProgressIndicator.adaptive(strokeWidth: 2),
                   )
                 : const Icon(Icons.open_in_new),
             label: Text(_isOpening ? 'Opening...' : 'Update Now'),

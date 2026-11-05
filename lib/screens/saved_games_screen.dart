@@ -5,6 +5,7 @@ import 'package:flutter_chess_app/services/friend_service.dart';
 import 'package:flutter_chess_app/services/saved_game_service.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/screens/game_replay_screen.dart';
+import 'package:flutter_chess_app/screens/import_pgn_screen.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
 import 'package:intl/intl.dart';
 
@@ -71,12 +72,27 @@ class _SavedGamesScreenState extends State<SavedGamesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Saved Games')),
+      appBar: AppBar(
+        title: const Text('Saved Games'),
+        actions: [
+          IconButton(
+            tooltip: 'Import a game (PGN or link)',
+            icon: const Icon(Icons.file_download_outlined),
+            onPressed: () async {
+              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ImportPgnScreen()));
+              if (!mounted) return;
+              setState(() {
+                _savedGamesFuture = _savedGameService.getSavedGamesForUser(widget.user.uid!);
+              });
+            },
+          ),
+        ],
+      ),
       body: FutureBuilder<List<SavedGame>>(
         future: _savedGamesFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
+            return const Center(child: CircularProgressIndicator.adaptive());
           } else if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
           } else if (!snapshot.hasData || snapshot.data!.isEmpty) {

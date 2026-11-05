@@ -66,7 +66,7 @@ class RulesInfoScreen extends StatelessWidget {
             _buildRuleSection(
               context,
               'Castling:',
-              'A special move involving the king and one of the rooks. It\'s the only move where two pieces move at once. The king moves two squares towards a rook, and the rook moves to the square the king crossed.',
+              'A special move involving the king and one of the rooks. The king moves two squares towards the rook, and the rook jumps to the square the king crossed. It is only allowed if: neither the king nor that rook has moved before; all squares between them are empty; the king is not in check; and the king does not pass through or land on an attacked square.',
             ),
             _buildRuleSection(
               context,
@@ -87,7 +87,7 @@ class RulesInfoScreen extends StatelessWidget {
             _buildRuleSection(
               context,
               'Checkmate:',
-              'The primary goal. When a king is attacked and has no legal moves to escape the attack.',
+              'The primary goal. The king is in check and the player has no legal move that gets out of check (by moving the king, capturing the attacker, or blocking it).',
             ),
             _buildRuleSection(
               context,
@@ -97,22 +97,58 @@ class RulesInfoScreen extends StatelessWidget {
             _buildRuleSection(
               context,
               'Draw by Agreement:',
-              'Players can agree to a draw at any point.',
+              'Players can agree to a draw at any point. In an online game, offer a draw and the opponent can accept or decline.',
             ),
             _buildRuleSection(
               context,
               'Draw by Repetition:',
-              'If the same position occurs three times, the game is a draw.',
+              'If the same position (same pieces, same player to move, same castling and en passant rights) occurs three times, the game is drawn automatically.',
             ),
             _buildRuleSection(
               context,
               'Draw by Fifty-Move Rule:',
-              'If 50 moves have passed without a pawn move or a capture, the game is a draw.',
+              'If each player has made 50 moves (100 half-moves in total) without a pawn move or a capture, the game is a draw.',
             ),
             _buildRuleSection(
               context,
               'Insufficient Material:',
-              'If neither player has enough pieces to checkmate the opponent, the game is a draw.',
+              'If neither player can possibly checkmate (for example king vs king, king and one knight or bishop vs king, or bishops that are all on the same colour), the game is a draw.',
+            ),
+            _buildRuleSection(
+              context,
+              'Resignation:',
+              'A player can resign at any time and the opponent wins.',
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Time Limits & Online Play:',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 16),
+            _buildRuleSection(
+              context,
+              'Time per move:',
+              'In "60 sec/move" and "30 sec/move" games you must move within that time on every turn, otherwise you lose on time. In Blitz (3 min + 5s bonus 3s) you have a total clock of 3 minutes with a small bonus added after each move.',
+            ),
+            _buildRuleSection(
+              context,
+              'Running out of time:',
+              'If your opponent runs out of time they lose, unless you could never checkmate (for example you only have a king). Then the game is a draw.',
+            ),
+            _buildRuleSection(
+              context,
+              'First move:',
+              'In online games the player with the white pieces has 30 seconds to make the first move. If the countdown runs out, that player loses.',
+            ),
+            _buildRuleSection(
+              context,
+              'Disconnection:',
+              'If a player loses connection in an online game, they have about 60 seconds to come back. After that the opponent wins.',
+            ),
+            _buildRuleSection(
+              context,
+              'Rating:',
+              'Very short games (fewer than 4 moves) do not change ratings. Games between the same two accounts count for rating only a limited number of times per day.',
             ),
             const SizedBox(height: 24),
             Text(

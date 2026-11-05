@@ -1,6 +1,11 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
+import 'package:flutter_chess_app/providers/streak_provider.dart';
+import 'package:flutter_chess_app/providers/mission_provider.dart';
 import 'dart:async';
 import 'dart:developer';
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/widgets/floating_message_button.dart';
+import 'package:flutter_chess_app/services/game_analyzer.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/models/game_room_model.dart';
 import 'package:flutter_chess_app/providers/game_provider.dart';
@@ -12,6 +17,7 @@ import 'package:flutter_chess_app/widgets/monetization_ads_widget.dart'
 import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/services/permission_service.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:flutter_chess_app/services/sound_service.dart';
 import 'package:bishop/bishop.dart' as bishop;
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
@@ -21,6 +27,7 @@ import 'package:flutter_chess_app/widgets/audio_room_invitation_dialog.dart';
 import 'package:flutter_chess_app/widgets/captured_piece_widget.dart';
 import 'package:flutter_chess_app/widgets/confirmation_dialog.dart';
 import 'package:flutter_chess_app/widgets/draw_offer_widget.dart';
+import 'package:flutter_chess_app/widgets/takeback_offer_widget.dart';
 import 'package:flutter_chess_app/widgets/friend_request_widget.dart';
 import 'package:flutter_chess_app/widgets/rematch_offer_widget.dart';
 import 'package:flutter_chess_app/widgets/first_move_countdown_widget.dart';
@@ -31,6 +38,11 @@ import 'package:flutter_chess_app/widgets/unread_badge_widget.dart';
 import 'package:provider/provider.dart';
 import 'package:squares/squares.dart';
 import 'package:flutter_chess_app/screens/chat_screen.dart';
+import 'package:flutter_chess_app/widgets/reaction_widgets.dart';
+import 'package:flutter_chess_app/widgets/live_watch_sheet.dart';
+import 'package:flutter_chess_app/widgets/move_arrow_overlay.dart';
+import 'package:flutter_chess_app/services/game_socket_service.dart';
+import 'package:flutter_chess_app/widgets/report_game_dialog.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:flutter_chess_app/services/livekit_token_service.dart';
 
@@ -42,13 +54,18 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> {
+class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   late GameProvider _gameProvider;
+  bool _appInForeground = true; // game sounds only play while true
   late AudioPlayer _checkmateSoundPlayer;
   late AudioPlayer _messageSoundPlayer;
 
   // Game over handling flag
   bool _gameOverHandled = false;
+  // Options > Confirm Moves: the move the player picked, waiting for Confirm / Cancel.
+  Move? _pendingMove;
+  String? _pendingFen; // position the pending move was picked in (a changed position cancels it)
+  int _seenNewGameCounter = 0; // see _handleRematchStateChange
   bool _isGameOverDialogShowing = false;
 
   // Audio room state variables
@@ -69,6 +86,9 @@ class _GameScreenState extends State<GameScreen> {
 
   // Message notification variables
   StreamSubscription<int>? _unreadMessageSubscription;
+  // Online training games: own engine for live warnings (see GameAnalyzer).
+  GameAnalyzer? _trainingAnalyzer;
+  bool _trainingStarting = false;
   int _previousUnreadCount = 0;
 
   // Rematch offer state
@@ -78,13 +98,15 @@ class _GameScreenState extends State<GameScreen> {
 
   // Banner ads are now handled by MonetizationBannerWidget
 
-  // Online status tracking for users in online games
-  bool _isOpponentOnline = true;
+  // Opponent online status comes from GameProvider.isOpponentOnline (real socket presence).
 
   @override
   void initState() {
     super.initState();
+    FloatingMessageController.hide();
+    WidgetsBinding.instance.addObserver(this);
     _gameProvider = context.read<GameProvider>();
+    _gameProvider.setGameSoundsAllowed(true); // sounds belong to this screen only
     _checkmateSoundPlayer = AudioPlayer();
     _messageSoundPlayer = AudioPlayer();
     _gameProvider.gameResultNotifier.addListener(_handleGameOver);
@@ -98,7 +120,9 @@ class _GameScreenState extends State<GameScreen> {
     // We make sure to reset the game state when entering the game screen
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _gameProvider.resetGame(false); // Start the game and timer
+      _gameProvider.trackGameStart();
       _gameOverHandled = false; // Reset the game over flag for new games
+      _endAdHandled = false; // new game: one ad allowed again
       _rematchExplicitlyAccepted = false; // Reset rematch flag for new games
 
       // For online games, we ensure the listener is active if it's not already
@@ -130,11 +154,11 @@ class _GameScreenState extends State<GameScreen> {
 
     // Listen for draw offer rejection
     _gameProvider.addListener(_handleDrawOfferRejection);
+    _gameProvider.addListener(_handleTakebackRejection);
 
     // Set up audio room monitoring for online games
     if (_gameProvider.isOnlineGame && _gameProvider.onlineGameRoom != null) {
       _setupAudioRoomListener();
-      _setupOpponentOnlineStatusListener();
     }
 
     // Set up message sound notification for online games
@@ -143,10 +167,30 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  /// Silences every game sound the moment the app leaves the foreground, and
+  /// lets them work again only when the player comes back to this screen.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final foreground = state == AppLifecycleState.resumed;
+    if (foreground == _appInForeground) return;
+    _appInForeground = foreground;
+    _gameProvider.setGameSoundsAllowed(foreground);
+    _gameProvider.setAppForeground(foreground); // opponent sees Offline while we are away
+    if (!foreground) {
+      _checkmateSoundPlayer.stop();
+      _messageSoundPlayer.stop();
+    }
+  }
+
   @override
   void dispose() {
+    _trainingAnalyzer?.dispose();
+    _trainingAnalyzer = null;
+    FloatingMessageController.show();
+    WidgetsBinding.instance.removeObserver(this);
     _gameProvider.gameResultNotifier.removeListener(_handleGameOver);
     _gameProvider.removeListener(_handleDrawOfferRejection);
+    _gameProvider.removeListener(_handleTakebackRejection);
     _gameProvider.removeListener(_handleRematchStateChange);
     _voiceChatAdGateSub?.cancel();
 
@@ -173,31 +217,6 @@ class _GameScreenState extends State<GameScreen> {
     // Banner ads are now handled by MonetizationBannerWidget
 
     super.dispose();
-  }
-
-  void _setupOpponentOnlineStatusListener() {
-    if (_gameProvider.onlineGameRoom == null) return;
-
-    // Listen for game room updates to track opponent online status
-    _gameProvider.onlineGameRoomUpdates.listen(
-      (gameRoom) => _handleOpponentOnlineStatus(gameRoom),
-      onError: (error) {
-        _gameProvider.logger.e(
-          'Error listening to opponent online status: $error',
-        );
-      },
-    );
-  }
-
-  void _handleOpponentOnlineStatus(GameRoom gameRoom) {
-    // Determine if opponent is online based on game room state
-    final bool opponentOnline = gameRoom.status == 'active';
-
-    if (_isOpponentOnline != opponentOnline && mounted) {
-      setState(() {
-        _isOpponentOnline = opponentOnline;
-      });
-    }
   }
 
   void _setupAudioRoomListener() {
@@ -233,21 +252,71 @@ class _GameScreenState extends State<GameScreen> {
         .listen((unreadCount) {
           // Play sound only when unread count increases (new message received)
           if (unreadCount > _previousUnreadCount) {
-            print('📨 New message received - unread count: $unreadCount');
+            dlog('📨 New message received - unread count: $unreadCount');
             _playMessageSound();
+            _flyMessageToChatIcon();
           }
           _previousUnreadCount = unreadCount;
         });
   }
 
+  final GlobalKey _chatIconKey = GlobalKey();
+
+  /// A small bubble leaves the board centre, flies to the chat icon in the
+  /// top bar and fades away. Ignores touches, so it never blocks a move.
+  void _flyMessageToChatIcon() {
+    if (!mounted) return;
+    final iconBox = _chatIconKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay = Overlay.maybeOf(context);
+    if (iconBox == null || !iconBox.attached || overlay == null) return;
+    final size = MediaQuery.of(context).size;
+    final start = Offset(size.width / 2, size.height / 2);
+    final end = iconBox.localToGlobal(iconBox.size.center(Offset.zero));
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (_) => IgnorePointer(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 900),
+          curve: Curves.easeInOutCubic,
+          onEnd: () => entry.remove(),
+          builder: (_, t, __) {
+            // slight curve: sideways bulge in the middle of the flight
+            final pos = Offset.lerp(start, end, t)! +
+                Offset(40 * (1 - (2 * t - 1) * (2 * t - 1)), 0);
+            final scale = t < 0.2 ? 0.6 + 2 * t : 1.0 - 0.7 * ((t - 0.2) / 0.8);
+            final opacity = t < 0.85 ? 1.0 : (1 - t) / 0.15;
+            return Positioned(
+              left: pos.dx - 20,
+              top: pos.dy - 20,
+              child: Opacity(
+                opacity: opacity.clamp(0.0, 1.0),
+                child: Transform.scale(
+                  scale: scale,
+                  child: const CircleAvatar(
+                    radius: 20,
+                    backgroundColor: Color(0xFF22C55E),
+                    child: Icon(Icons.chat_bubble, color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    overlay.insert(entry);
+  }
+
   Future<void> _playMessageSound() async {
+    if (!mounted || !_appInForeground || !SoundService.instance.audible) return;
     try {
-      print('🔊 Attempting to play message sound...');
-      await _messageSoundPlayer.setAsset('assets/audio/message_sound.mp3');
+      dlog('🔊 Attempting to play message sound...');
+      await _messageSoundPlayer.setAsset('assets/audio/message.wav');
       await _messageSoundPlayer.play();
-      print('✅ Message sound played successfully');
+      dlog('✅ Message sound played successfully');
     } catch (e) {
-      print('❌ Error playing message sound: $e');
+      dlog('❌ Error playing message sound: $e');
       _gameProvider.logger.e('Error playing message sound: $e');
     }
   }
@@ -349,6 +418,7 @@ class _GameScreenState extends State<GameScreen> {
         .requestMicrophonePermission(context);
 
     if (permissionResult == PermissionResult.denied) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Microphone permission is required for voice chat'),
@@ -373,6 +443,7 @@ class _GameScreenState extends State<GameScreen> {
         _hasTemporaryAudioAccess = true;
       } else if (result == AudioAccessAction.premium) {
         // Navigate to premium screen or show premium info
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Visit Profile screen to upgrade to Premium'),
@@ -395,6 +466,7 @@ class _GameScreenState extends State<GameScreen> {
       // Remote audio tracks are auto-subscribed and attached by the LiveKit
       // TrackSubscribedEvent listener, so no manual stream start is needed.
 
+      if (!mounted) return;
       setState(() {
         _isInAudioRoom = true;
         _isMicrophoneEnabled = true; // Start with mic enabled
@@ -437,6 +509,7 @@ class _GameScreenState extends State<GameScreen> {
       // Remote audio tracks are auto-subscribed and attached by the LiveKit
       // TrackSubscribedEvent listener, so no manual stream start is needed.
 
+      if (!mounted) return;
       setState(() {
         _isInAudioRoom = true;
         _isMicrophoneEnabled = true;
@@ -452,6 +525,7 @@ class _GameScreenState extends State<GameScreen> {
     try {
       await _cleanupVoiceEngine();
 
+      if (!mounted) return;
       setState(() {
         _isInAudioRoom = false;
         _isMicrophoneEnabled = false;
@@ -538,8 +612,9 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Play checkmate sound effect
   Future<void> _playCheckmateSoundEffect() async {
+    if (!mounted || !_appInForeground || !SoundService.instance.audible) return;
     try {
-      await _checkmateSoundPlayer.setAsset('assets/audio/checkmate.mp3');
+      await _checkmateSoundPlayer.setAsset('assets/audio/checkmate.wav');
       await _checkmateSoundPlayer.play();
     } catch (e) {
       _gameProvider.logger.e('Error playing checkmate sound: $e');
@@ -548,20 +623,43 @@ class _GameScreenState extends State<GameScreen> {
 
   /// Handle rematch state changes (reset game over flag when rematch is accepted)
   void _handleRematchStateChange() {
+    // A brand-new online game replaced the finished one (rematch): close the
+    // old "game over" dialog and clear the screen's per-game flags.
+    if (_seenNewGameCounter != _gameProvider.newGameCounter) {
+      _seenNewGameCounter = _gameProvider.newGameCounter;
+      if (_isGameOverDialogShowing && mounted) {
+        _isGameOverDialogShowing = false; // closed exactly once, never popped twice
+        Navigator.of(context).pop(GameOverAction.none);
+      }
+      if (mounted) {
+        setState(() {
+          _gameOverHandled = false;
+          _endAdHandled = false; // new game: one ad allowed again
+          _rematchExplicitlyAccepted = false;
+          _showRematchOffer = false;
+          _rematchOffererName = null;
+        });
+      }
+      return;
+    }
+
     // Auto-close dialog if rematch is pending (opponent accepted rematch)
     if (_gameProvider.rematchPending && _isGameOverDialogShowing && mounted) {
       _gameProvider.logger.i(
         'Rematch pending detected - auto-closing game over dialog',
       );
-      // Close the game over dialog
+      // Close the game over dialog (flag cleared first so it can never be popped twice)
+      _isGameOverDialogShowing = false;
       Navigator.of(context).pop(GameOverAction.none);
       // Reset the game after a short delay to ensure dialog is fully closed
       Future.delayed(const Duration(milliseconds: 100), () {
         if (mounted) {
           _gameProvider.logger.i('Resetting game for rematch');
           _gameProvider.resetGame(false);
+          _gameProvider.trackGameStart();
           setState(() {
             _gameOverHandled = false;
+            _endAdHandled = false; // new game: one ad allowed again
             _rematchExplicitlyAccepted = false;
           });
         }
@@ -575,8 +673,10 @@ class _GameScreenState extends State<GameScreen> {
         'Rematch pending detected - dialog already closed, resetting game',
       );
       _gameProvider.resetGame(false);
+      _gameProvider.trackGameStart();
       setState(() {
         _gameOverHandled = false;
+        _endAdHandled = false; // new game: one ad allowed again
         _rematchExplicitlyAccepted = false;
         _showRematchOffer = false;
         _rematchOffererName = null;
@@ -599,6 +699,7 @@ class _GameScreenState extends State<GameScreen> {
       );
       setState(() {
         _gameOverHandled = false;
+        _endAdHandled = false; // new game: one ad allowed again
         _showRematchOffer = false; // Hide rematch offer widget
         _rematchOffererName = null;
         _rematchExplicitlyAccepted = false; // Reset the flag
@@ -679,6 +780,67 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  /// Tells the player their takeback request was declined (shown once).
+  void _handleTakebackRejection() {
+    if (_gameProvider.takebackRejected && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Row(
+            children: [
+              Icon(Icons.undo, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(child: Text('Your takeback request was declined')),
+            ],
+          ),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+      _gameProvider.clearTakebackRejection();
+    }
+  }
+
+  /// Abort: only offered by the server before 2 plies; no result, no rating change.
+  void _showAbortDialog() async {
+    final bool? confirm = await AnimatedDialog.show<bool>(
+      context: context,
+      title: 'Abort Game?',
+      maxWidth: 400,
+      isDestructive: true,
+      icon: Icons.cancel_outlined,
+      child: const ConfirmationDialog(
+        message: 'The game will be cancelled. No rating change.',
+        confirmButtonText: 'Abort',
+        cancelButtonText: 'Keep playing',
+        isDestructive: true,
+        confirmIcon: Icons.cancel_outlined,
+      ),
+    );
+    if (confirm == true) await _gameProvider.abortOnlineGame();
+  }
+
+  /// Ask the opponent to allow taking back our last move.
+  void _showTakebackOfferDialog() async {
+    final bool? confirm = await AnimatedDialog.show<bool>(
+      context: context,
+      title: 'Ask for a takeback?',
+      maxWidth: 400,
+      child: const ConfirmationDialog(
+        message: 'Your opponent must agree. Your last move (and their reply, if any) will be undone.',
+        confirmButtonText: 'Ask',
+        cancelButtonText: 'Cancel',
+      ),
+    );
+    if (confirm == true) {
+      await _gameProvider.offerTakeback();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Takeback request sent'), duration: Duration(seconds: 2)),
+        );
+      }
+    }
+  }
+
   /// Handle draw offer rejection notification
   void _handleDrawOfferRejection() {
     // Handle rejection received from opponent (user offered, opponent rejected)
@@ -702,11 +864,71 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  /// One interstitial per game, however the player leaves it (new game, back button,
+  /// quit, win, lose or draw). Returns once the ad closed, failed or was skipped.
+  bool _endAdHandled = false;
+  bool _isLeaving = false;
+
+  /// Ads only run in online games, for users who should see ads.
+  bool _endAdAllowed() =>
+      mounted &&
+      _gameProvider.isOnlineGame &&
+      MonetizationService.shouldShowAds(context, widget.user);
+
+  /// Game over: short pause (the player sees the final position), then the ad (once),
+  /// then the Game Over dialog (Rematch / Review / New game). Nothing the player does
+  /// after that shows another ad.
+  Future<void> _showAdThenGameOverDialog() async {
+    if (_endAdAllowed() && !_endAdHandled) {
+      await Future.delayed(const Duration(milliseconds: 1200));
+      if (!mounted || _isLeaving) return;
+      await _showEndOfGameAdOnce();
+    }
+    // Still the same finished game and the screen is still here?
+    if (!mounted || _isLeaving || !_gameProvider.isGameOver) return;
+    _showGameOverDialog();
+  }
+
+  Future<void> _showEndOfGameAdOnce() async {
+    if (_endAdHandled) return;
+    _endAdHandled = true;
+    if (!mounted) return;
+    if (!_endAdAllowed()) return;
+
+    final done = Completer<void>();
+    void finish() {
+      if (!done.isCompleted) done.complete();
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) =>
+          const Center(child: CircularProgressIndicator.adaptive()),
+    );
+    MonetizationService.showInterstitialAd(
+      context: context,
+      onAdClosed: () {
+        log('Interstitial ad closed');
+        finish();
+      },
+      onAdFailedToLoad: () {
+        log('Interstitial ad skipped or failed to load');
+        finish();
+      },
+    );
+    // Safety net: never leave the player stuck on the loading spinner.
+    await done.future.timeout(const Duration(seconds: 60), onTimeout: () {});
+    if (mounted) Navigator.of(context).pop(); // close the loading spinner
+  }
+
   void _handleGameOver() {
     // Prevent multiple calls to this method
     if (_gameOverHandled) {
       return;
     }
+    // Already leaving (quit): no game-over dialog on top of the exit flow.
+    if (_isLeaving) return;
 
     // Only show dialog if game result is not null and game is actually over
     final gameResult = _gameProvider.gameResult;
@@ -717,6 +939,9 @@ class _GameScreenState extends State<GameScreen> {
     // Play checkmate sound if it's a checkmate
     if (gameResult is bishop.WonGameCheckmate) {
       _playCheckmateSoundEffect();
+    } else if (_appInForeground) {
+      // Draw, resignation, timeout, ...: the end-of-game sound (obeys Options > Sound Effects).
+      SoundService.instance.play(SoundEffect.gameEnd);
     }
 
     // Ensure the game is saved for all game types
@@ -738,11 +963,17 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
-    // Show dialog immediately
-    _showGameOverDialog();
+    // A finished game counts for the daily streak and the daily missions on the SERVER (online
+    // games it finishes itself, CPU games when the result is saved). Give it a moment, then refresh.
+    final missionProvider = context.read<MissionProvider>();
+    final streakProvider = context.read<StreakProvider>();
+    Future.delayed(const Duration(seconds: 3), () {
+      streakProvider.refresh();
+      missionProvider.refresh();
+    });
 
-    // TODO: Consider showing ad after user makes a decision (rematch/leave)
-    // Currently ads are only shown when user navigates away from game screen
+    // Ad first (once per game), then the dialog with Rematch / Review / New game.
+    _showAdThenGameOverDialog();
   }
 
   void _showGameOverDialog() {
@@ -762,6 +993,7 @@ class _GameScreenState extends State<GameScreen> {
           isOnlineGame: _gameProvider.isOnlineGame,
         ),
       ).then((action) {
+        if (!mounted) return; // the screen was left while the dialog was open
         setState(() {
           _isGameOverDialogShowing = false;
         });
@@ -775,6 +1007,7 @@ class _GameScreenState extends State<GameScreen> {
             setState(() {
               _rematchExplicitlyAccepted = true;
               _gameOverHandled = false;
+              _endAdHandled = false; // new game: one ad allowed again
             });
             break;
           case GameOverAction.newGame:
@@ -784,46 +1017,8 @@ class _GameScreenState extends State<GameScreen> {
               _gameProvider.cancelOnlineGameSearch();
             }
 
-            // Show ad before navigating away if applicable
-            final shouldShowAd =
-                isOnline &&
-                MonetizationService.shouldShowAds(context, widget.user);
-
-            if (shouldShowAd && mounted) {
-              // Show loading indicator while ad is loading
-              showDialog(
-                context: context,
-                barrierDismissible: false,
-                builder: (BuildContext context) {
-                  return const Center(child: CircularProgressIndicator());
-                },
-              );
-
-              MonetizationService.showInterstitialAd(
-                context: context,
-                onAdClosed: () {
-                  log('Interstitial ad closed - user starting new game');
-                  // Close loading dialog and navigate after ad closes
-                  if (mounted) {
-                    Navigator.of(context).pop(); // Close loading dialog
-                    Navigator.of(context).pop(); // Navigate back
-                  }
-                },
-                onAdFailedToLoad: () {
-                  log('Interstitial ad failed to load');
-                  // Close loading dialog and navigate even if ad fails
-                  if (mounted) {
-                    Navigator.of(context).pop(); // Close loading dialog
-                    Navigator.of(context).pop(); // Navigate back
-                  }
-                },
-              );
-            } else {
-              // No ad needed, navigate immediately
-              if (mounted) {
-                Navigator.of(context).pop();
-              }
-            }
+            // The ad was already shown before this dialog: just go back.
+            if (mounted) Navigator.of(context).pop();
             break;
           case GameOverAction.none:
             // Do nothing
@@ -833,12 +1028,103 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-  void _onMove(Move move) async {
+  /// Online training game: warn about my own last move with a separate engine.
+  Future<void> _trainingCheck(String fenBefore, String fenAfter) async {
+    if (_trainingAnalyzer == null) {
+      if (_trainingStarting) return;
+      _trainingStarting = true;
+      final analyzer = GameAnalyzer();
+      final ok = await analyzer.start();
+      _trainingStarting = false;
+      if (!mounted || !ok) {
+        analyzer.dispose();
+        return;
+      }
+      _trainingAnalyzer = analyzer;
+    }
+    final warning = await _trainingAnalyzer?.checkMove(fenBefore, fenAfter);
+    if (warning != null && mounted && _gameProvider.coachEnabled) {
+      _gameProvider.showCoachWarning(warning);
+    }
+  }
+
+  /// A move picked on the board. With Options > Confirm Moves it only becomes a pending move
+  /// (arrow + Confirm / Cancel bar); otherwise it is played at once. Premoves are never held back.
+  void _onMove(Move move) {
+    if (context.read<SettingsProvider>().confirmMoves && !_gameProvider.isGameOver) {
+      setState(() {
+        _pendingMove = move;
+        _pendingFen = _gameProvider.game.fen;
+      });
+      return;
+    }
+    _playMove(move);
+  }
+
+  void _confirmPending() {
+    final move = _pendingMove;
+    if (move == null) return;
+    final stale = _pendingFen != _gameProvider.game.fen || _gameProvider.isGameOver;
+    setState(() {
+      _pendingMove = null;
+      _pendingFen = null;
+    });
+    if (!stale) _playMove(move);
+  }
+
+  void _cancelPending() => setState(() {
+        _pendingMove = null;
+        _pendingFen = null;
+      });
+
+  /// The board with the pending move drawn as an arrow (nothing extra when no move is pending).
+  Widget _withPendingMove(GameProvider gp, Widget board) {
+    final uci = _pendingMove?.algebraic();
+    final showArrow = uci != null && ArrowGeometry.parseUci(uci) != null;
+    // Always a Stack, so the board widget keeps its state when an arrow appears or goes away.
+    return Stack(children: [
+      board,
+      if (showArrow)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(painter: MoveArrowPainter(uci: uci, flipped: gp.flipBoard)),
+          ),
+        ),
+    ]);
+  }
+
+  Widget _confirmBar(GameProvider gp) {
+    final move = _pendingMove;
+    if (move == null) return const SizedBox.shrink();
+    // The position changed or the game ended while the move was waiting: drop it.
+    if (_pendingFen != gp.game.fen || gp.isGameOver) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pendingMove != null) _cancelPending();
+      });
+      return const SizedBox.shrink();
+    }
+    final uci = move.algebraic();
+    final label = uci.length >= 4 ? '${uci.substring(0, 2)} → ${uci.substring(2, 4)}' : uci;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: Row(children: [
+        Expanded(child: OutlinedButton.icon(onPressed: _cancelPending, icon: const Icon(Icons.close), label: const Text('Cancel'))),
+        const SizedBox(width: 12),
+        Expanded(child: FilledButton.icon(onPressed: _confirmPending, icon: const Icon(Icons.check), label: Text('Play $label'))),
+      ]),
+    );
+  }
+
+  void _playMove(Move move) async {
+    final fenBefore = _gameProvider.game.fen;
     // Make a squared move and set the squares state
     await _gameProvider.makeSquaresMove(move, userId: widget.user.uid!);
+    final fenAfter = _gameProvider.game.fen;
 
     // Check if VS CPU mode is enabled
     if (_gameProvider.vsCPU) {
+      // Practice coach: quick look at my move first (about half a second), then the CPU replies.
+      await _gameProvider.coachCheckMove(fenBefore, fenAfter);
       _gameProvider.makeStockfishMove();
     } else if (_gameProvider.localMultiplayer) {
       // In local multiplayer, no external notification is needed, we just make the move
@@ -846,138 +1132,80 @@ class _GameScreenState extends State<GameScreen> {
     } else if (_gameProvider.isOnlineGame) {
       // For online games, the move is handled by the GameProvider's Firestore update
       // The opponent will receive the update via the stream
+      if (_gameProvider.isTrainingGame && _gameProvider.coachEnabled) {
+        _trainingCheck(fenBefore, fenAfter);
+      }
     }
   }
 
   /// Handles the user's attempt to pop the screen (e.g., via back button).
   /// Prompts the user to confirm resigning the game with a clear warning about losing.
   Future<bool> _onWillPop() async {
-    // If game is already over, allow user to leave but show confirmation and ad
+    // Game already over: no extra "Leave Game?" dialog. Back = leave, with at most one ad per game.
     if (_gameProvider.isGameOver) {
-      // Check if a dialog is currently showing (game over dialog)
-      // If so, let the dialog handle the back button (it will just close the dialog)
+      // The game-over dialog is open: back just closes it (it will not leave the screen).
       if (ModalRoute.of(context)?.isCurrent == false) {
-        return false; // Don't pop the game screen, just close the dialog
+        return false;
       }
-
-      // Game is over and no dialog showing, confirm if user wants to leave
-      final bool? confirmLeave = await AnimatedDialog.show<bool>(
-        context: context,
-        title: 'Leave Game?',
-        maxWidth: 400,
-        child: const ConfirmationDialog(
-          message: 'Do you want to leave and return to the home screen?',
-          confirmButtonText: 'Leave',
-          cancelButtonText: 'Stay',
-        ),
-      );
-
-      if (confirmLeave == true) {
-        final shouldShowAd =
-            _gameProvider.isOnlineGame &&
-            MonetizationService.shouldShowAds(context, widget.user);
-
-        if (shouldShowAd && mounted) {
-          // Show loading indicator while ad is loading
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (BuildContext context) {
-              return const Center(child: CircularProgressIndicator());
-            },
-          );
-
-          // Show interstitial ad before navigating away
-          MonetizationService.showInterstitialAd(
-            context: context,
-            onAdClosed: () {
-              log('Interstitial ad closed - user leaving game');
-              // Close loading dialog
-              if (mounted) {
-                Navigator.of(context).pop(); // Close loading dialog
-              }
-            },
-            onAdFailedToLoad: () {
-              log('Interstitial ad failed to load');
-              // Close loading dialog
-              if (mounted) {
-                Navigator.of(context).pop(); // Close loading dialog
-              }
-            },
-          );
-        }
-        return true;
-      }
-      return false;
+      return true; // the ad was already shown before the Game Over dialog
     }
 
     final bool? confirmLeave = await AnimatedDialog.show<bool>(
       context: context,
       title: 'End Game?',
       maxWidth: 400,
+      isDestructive: true,
+      icon: Icons.flag_rounded,
       child: const ConfirmationDialog(
         message:
             'Quitting will end the game and count as a loss. You will lose rating points and lose the match. Are you sure?',
         confirmButtonText: 'Quit & Lose',
         cancelButtonText: 'Cancel',
+        isDestructive: true,
+        confirmIcon: Icons.flag_rounded,
       ),
     );
 
     if (confirmLeave == true) {
+      _isLeaving = true; // no Game Over dialog on top of the exit flow
       await _gameProvider.resignGame(
         userId: widget.user.uid,
       ); // Await resignation for online games
 
-      // Show ad for online games when user quits
-      final shouldShowAd =
-          _gameProvider.isOnlineGame &&
-          MonetizationService.shouldShowAds(context, widget.user);
-
-      if (shouldShowAd && mounted) {
-        // Show loading indicator while ad is loading
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (BuildContext context) {
-            return const Center(child: CircularProgressIndicator());
-          },
-        );
-
-        // Show interstitial ad before navigating away
-        MonetizationService.showInterstitialAd(
-          context: context,
-          onAdClosed: () {
-            log('Interstitial ad closed - user quit game');
-            // Close loading dialog
-            if (mounted) {
-              Navigator.of(context).pop(); // Close loading dialog
-            }
-          },
-          onAdFailedToLoad: () {
-            log('Interstitial ad failed to load after quitting');
-            // Close loading dialog
-            if (mounted) {
-              Navigator.of(context).pop(); // Close loading dialog
-            }
-          },
-        );
-      }
+      // Same single end-of-game ad as every other way of leaving.
+      await _showEndOfGameAdOnce();
 
       return true;
     }
     return false;
   }
 
-  /// Shows a confirmation dialog for resigning the game.
+  /// TV icon: two switches (Public / Friends) and a searchable friends list. See LiveWatchSheet.
+  Future<void> _showLiveSheet() async {
+    final room = _gameProvider.onlineGameRoom;
+    final myId = widget.user.uid;
+    if (room == null || myId == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => LiveWatchSheet(room: room, myId: myId),
+    );
+  }
+
   void _showResignDialog() async {
     final bool? confirmResign = await AnimatedDialog.show<bool>(
       context: context,
       title: 'Resign Game?',
       maxWidth: 400,
+      isDestructive: true,
+      icon: Icons.flag_rounded,
       child: const ConfirmationDialog(
         message: 'Are you sure you want to resign?',
         confirmButtonText: 'Resign',
         cancelButtonText: 'Cancel',
+        isDestructive: true,
+        confirmIcon: Icons.flag_rounded,
       ),
     );
 
@@ -1098,6 +1326,20 @@ class _GameScreenState extends State<GameScreen> {
                 ],
               ),
               actions: [
+                if (gameProvider.vsCPU || gameProvider.isTrainingGame)
+                  IconButton(
+                    onPressed: () =>
+                        gameProvider.setCoachEnabled(!gameProvider.coachEnabled),
+                    icon: Icon(
+                      gameProvider.coachEnabled
+                          ? Icons.warning_amber_rounded
+                          : Icons.warning_amber_outlined,
+                      color: gameProvider.coachEnabled ? Colors.amber : null,
+                    ),
+                    tooltip: gameProvider.coachEnabled
+                        ? 'Move warnings: ON'
+                        : 'Move warnings: OFF',
+                  ),
                 IconButton(
                   onPressed: gameProvider.flipTheBoard,
                   icon: const Icon(Icons.rotate_left),
@@ -1109,11 +1351,51 @@ class _GameScreenState extends State<GameScreen> {
                     icon: const Icon(Icons.handshake),
                     tooltip: 'Offer Draw',
                   ),
-                IconButton(
-                  onPressed: _showResignDialog,
-                  icon: const Icon(Icons.flag),
-                  tooltip: 'Resign',
-                ),
+                if (gameProvider.canOfferTakeback)
+                  IconButton(
+                    onPressed: _showTakebackOfferDialog,
+                    icon: const Icon(Icons.undo),
+                    tooltip: 'Ask for takeback',
+                  ),
+                if (gameProvider.canAbortOnline)
+                  IconButton(
+                    onPressed: _showAbortDialog,
+                    icon: const Icon(Icons.cancel_outlined),
+                    tooltip: 'Abort',
+                  )
+                else
+                  IconButton(
+                    onPressed: _showResignDialog,
+                    icon: const Icon(Icons.flag),
+                    tooltip: 'Resign',
+                  ),
+                if (gameProvider.isOnlineGame &&
+                    gameProvider.onlineGameRoom?.player2Id != null)
+                  IconButton(
+                    onPressed: () => showReportGameDialog(
+                      context,
+                      gameProvider.onlineGameRoom!.gameId,
+                    ),
+                    icon: const Icon(Icons.report_gmailerrorred),
+                    tooltip: 'Report opponent',
+                  ),
+                if (gameProvider.isOnlineGame &&
+                    !gameProvider.isGameOver &&
+                    gameProvider.onlineGameRoom != null)
+                  IconButton(
+                    onPressed: _showLiveSheet,
+                    icon: Icon(
+                      (gameProvider.onlineGameRoom!.publicWatch ||
+                              gameProvider.onlineGameRoom!.friendsWatch)
+                          ? Icons.live_tv
+                          : Icons.live_tv_outlined,
+                      color: (gameProvider.onlineGameRoom!.publicWatch ||
+                              gameProvider.onlineGameRoom!.friendsWatch)
+                          ? Colors.red
+                          : null,
+                    ),
+                    tooltip: 'Live watching',
+                  ),
                 if (gameProvider.isOnlineGame)
                   Builder(
                     builder: (context) {
@@ -1145,7 +1427,7 @@ class _GameScreenState extends State<GameScreen> {
                               child: GestureDetector(
                                 onTap: () =>
                                     _showInGameChat(context, gameProvider),
-                                child: Icon(Icons.chat),
+                                child: Icon(Icons.chat, key: _chatIconKey),
                               ),
                             ),
                           );
@@ -1183,27 +1465,31 @@ class _GameScreenState extends State<GameScreen> {
                     // Chess board
                     Padding(
                       padding: const EdgeInsets.all(4.0),
-                      child: BoardController(
+                      child: _withPendingMove(
+                        gameProvider,
+                        BoardController(
                         state: gameProvider.flipBoard
                             ? gameProvider.state.board.flipped()
                             : gameProvider.state.board,
                         playState: gameProvider.state.state,
                         pieceSet: settingsProvider.getPieceSet(),
-                        theme: settingsProvider.boardTheme,
+                        theme: settingsProvider.effectiveBoardTheme,
                         animatePieces: settingsProvider.animatePieces,
                         labelConfig: settingsProvider.showLabels
                             ? LabelConfig.standard
                             : LabelConfig.disabled,
                         moves: gameProvider.state.moves,
                         onMove: _onMove,
-                        onPremove: _onMove,
+                        onPremove: _playMove,
                         markerTheme: MarkerTheme(
                           empty: MarkerTheme.dot,
                           piece: MarkerTheme.corners(),
                         ),
                         promotionBehaviour: PromotionBehaviour.autoPremove,
+                        ),
                       ),
                     ),
+                    _confirmBar(gameProvider),
 
                     // First move countdown for online games
                     if (gameProvider.isOnlineGame &&
@@ -1241,6 +1527,20 @@ class _GameScreenState extends State<GameScreen> {
                         gameProvider,
                         settingsProvider,
                       ),
+                    // Emoji reactions + per-player counts (players and Live viewers see the same numbers).
+                    if (gameProvider.isOnlineGame &&
+                        !gameProvider.isGameOver &&
+                        gameProvider.onlineGameRoom != null &&
+                        gameProvider.onlineGameRoom!.player2Id != null)
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: GameReactionPanel(
+                            key: ValueKey(gameProvider.onlineGameRoom!.gameId),
+                            room: gameProvider.onlineGameRoom!,
+                            myId: widget.user.uid ?? '',
+                          ),
+                        ),
+                      ),
                     // // Display scores for online games
                     // if (gameProvider.isOnlineGame &&
                     //     gameProvider.onlineGameRoom != null)
@@ -1272,6 +1572,16 @@ class _GameScreenState extends State<GameScreen> {
                       onDecline: () => gameProvider.handleDrawOffer(false),
                     ),
                   ),
+                if (gameProvider.takebackReceived && !gameProvider.drawOfferReceived)
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: TakebackOfferWidget(
+                      onAccept: () => gameProvider.handleTakebackOffer(true),
+                      onDecline: () => gameProvider.handleTakebackOffer(false),
+                    ),
+                  ),
                 if (gameProvider.friendRequestReceived)
                   Positioned(
                     bottom: 0,
@@ -1299,6 +1609,70 @@ class _GameScreenState extends State<GameScreen> {
                       opponentName: _rematchOffererName!,
                       onAccept: _handleRematchAccept,
                       onDecline: _handleRematchDecline,
+                    ),
+                  ),
+                // Training badge + live move warning (never blocks the board).
+                if (gameProvider.isTrainingGame || gameProvider.vsCPU)
+                  Positioned(
+                    top: 4,
+                    left: 8,
+                    right: 8,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (gameProvider.isTrainingGame)
+                          IgnorePointer(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: Colors.blueGrey.withValues(alpha: 0.9),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Text(
+                                'Training mode: engine warnings ON, game is unrated',
+                                style: TextStyle(color: Colors.white, fontSize: 12),
+                              ),
+                            ),
+                          ),
+                        ValueListenableBuilder<CoachWarning?>(
+                          valueListenable: gameProvider.coachWarning,
+                          builder: (context, warning, _) {
+                            if (warning == null) return const SizedBox.shrink();
+                            final color = warning.mark == '??'
+                                ? Colors.red
+                                : warning.mark == '?'
+                                    ? Colors.deepOrange
+                                    : Colors.amber.shade800;
+                            return GestureDetector(
+                              onTap: gameProvider.clearCoachWarning,
+                              child: Container(
+                                margin: const EdgeInsets.only(top: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: color.withValues(alpha: 0.95),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.warning_amber_rounded, color: Colors.white),
+                                    const SizedBox(width: 8),
+                                    Flexible(
+                                      child: Text(
+                                        warning.text,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
                     ),
                   ),
               ],
@@ -1342,9 +1716,10 @@ class _GameScreenState extends State<GameScreen> {
           Row(
             children: [
               // Opponent profile and info (left side)
+              // The computer / a local second player has no country, so no flag.
               ProfileImageWidget(
                 imageUrl: null,
-                countryCode: widget.user.countryCode,
+                countryCode: null,
                 radius: 20,
                 isEditable: false,
                 backgroundColor: Theme.of(
@@ -1466,11 +1841,6 @@ class _GameScreenState extends State<GameScreen> {
                 children: [
                   Row(
                     children: [
-                      _buildOnlineStatusIndicator(
-                        isOnline: _isOpponentOnline,
-                        size: 12,
-                        padding: const EdgeInsets.only(right: 6),
-                      ),
                       Text(
                         opponentDisplayName,
                         style: Theme.of(context).textTheme.titleMedium,
@@ -1497,8 +1867,8 @@ class _GameScreenState extends State<GameScreen> {
                       ),
                       const SizedBox(width: 16),
                       _buildOnlineStatusWithLabel(
-                        isOnline: _isOpponentOnline,
-                        label: _isOpponentOnline ? 'Online' : 'Offline',
+                        isOnline: gameProvider.isOpponentOnline,
+                        label: gameProvider.isOpponentOnline ? 'Online' : 'Offline',
                       ),
                     ],
                   ),
@@ -1645,12 +2015,6 @@ class _GameScreenState extends State<GameScreen> {
                 children: [
                   Row(
                     children: [
-                      if (gameProvider.isOnlineGame)
-                        _buildOnlineStatusIndicator(
-                          isOnline: true,
-                          size: 12,
-                          padding: const EdgeInsets.only(right: 6),
-                        ),
                       Text(
                         gameProvider.isOnlineGame &&
                                 gameProvider.onlineGameRoom != null
@@ -1673,13 +2037,6 @@ class _GameScreenState extends State<GameScreen> {
                         'Rating: ${gameProvider.isOnlineGame && gameProvider.onlineGameRoom != null ? (gameProvider.isHost ? gameProvider.onlineGameRoom!.player1Rating : gameProvider.onlineGameRoom!.player2Rating ?? widget.user.classicalRating) : widget.user.classicalRating}',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      if (gameProvider.isOnlineGame) ...[
-                        const SizedBox(width: 16),
-                        _buildOnlineStatusWithLabel(
-                          isOnline: true,
-                          label: 'Online',
-                        ),
-                      ],
                     ],
                   ),
                 ],
@@ -1831,7 +2188,7 @@ class _GameScreenState extends State<GameScreen> {
                 child: gameProvider.aiMoveRequestedForPlayer
                     ? const Padding(
                         padding: EdgeInsets.all(14),
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CircularProgressIndicator.adaptive(strokeWidth: 2),
                       )
                     : Icon(
                         Icons.auto_awesome,
@@ -2247,6 +2604,7 @@ class _GameScreenState extends State<GameScreen> {
 
       await _cleanupVoiceEngine();
 
+      if (!mounted) return;
       setState(() {
         _isInAudioRoom = false;
         _isMicrophoneEnabled = false;
@@ -2328,6 +2686,7 @@ class _GameScreenState extends State<GameScreen> {
         .requestMicrophonePermission(context);
 
     if (permissionResult == PermissionResult.denied) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Microphone permission is required for voice chat'),
@@ -2351,6 +2710,7 @@ class _GameScreenState extends State<GameScreen> {
       if (result == AudioAccessAction.watchAd) {
         _hasTemporaryAudioAccess = true;
       } else if (result == AudioAccessAction.premium) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Visit Profile screen to upgrade to Premium'),
@@ -2366,6 +2726,7 @@ class _GameScreenState extends State<GameScreen> {
     try {
       await _gameProvider.inviteToAudioRoom(widget.user.uid!);
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Audio room invitation sent!'),
@@ -2405,9 +2766,10 @@ class _GameScreenState extends State<GameScreen> {
           Row(
             children: [
               // Opponent profile and info (left side)
+              // The computer / a local second player has no country, so no flag.
               ProfileImageWidget(
                 imageUrl: null,
-                countryCode: widget.user.countryCode,
+                countryCode: null,
                 radius: 20,
                 isEditable: false,
                 backgroundColor: Theme.of(
@@ -2566,7 +2928,11 @@ class _GameScreenState extends State<GameScreen> {
       builder: (context) {
         return SizedBox(
           height: MediaQuery.of(context).size.height * 0.7,
-          child: ChatScreen(currentUser: widget.user, otherUser: opponent),
+          child: ChatScreen(
+            currentUser: widget.user,
+            otherUser: opponent,
+            showInvite: false,
+          ),
         );
       },
     );

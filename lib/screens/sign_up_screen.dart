@@ -1,7 +1,9 @@
 import 'package:country_flags/country_flags.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/screens/login_screen.dart';
+import 'package:flutter_chess_app/screens/privacy_policy_screen.dart';
 import 'package:flutter_chess_app/services/auth_service.dart';
+import 'package:flutter_chess_app/services/user_service.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
 import '../widgets/main_app_button.dart';
@@ -24,7 +26,22 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _isLoading = false;
   bool _isPasswordVisible = false;
   bool _isConfirmPasswordVisible = false;
+  bool _acceptedTerms = false;
   String _countryCode = 'US';
+
+  @override
+  void initState() {
+    super.initState();
+    _preselectCountry();
+  }
+
+  /// Pre-selects the flag: country from the server's IP lookup, else the phone's
+  /// region. The person can still change it.
+  Future<void> _preselectCountry() async {
+    final fromIp = await _userService.detectCountry();
+    final code = fromIp ?? await UserService().getCountryCodeFromIP();
+    if (mounted) setState(() => _countryCode = code);
+  }
 
   @override
   void dispose() {
@@ -37,6 +54,16 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   Future<void> _signUp() async {
     if (_isLoading) return; // Prevent multiple submissions
+    if (!_acceptedTerms) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please confirm you are 13 or older and accept the Privacy Policy.',
+          ),
+        ),
+      );
+      return;
+    }
     if (_formKey.currentState!.validate()) {
       setState(() {
         _isLoading = true;
@@ -51,6 +78,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         if (mounted) {
           await _userService
               .signOut(); // Sign out after successful registration
+          if (!mounted) return;
           Navigator.of(context).pop(); // Navigate back to login screen
 
           // Show snackbar
@@ -393,9 +421,34 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       ),
                       validator: _validateConfirmPassword,
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 16),
+                    CheckboxListTile(
+                      value: _acceptedTerms,
+                      onChanged: (v) =>
+                          setState(() => _acceptedTerms = v ?? false),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text(
+                        'I am 13 or older and accept the Privacy Policy.',
+                        style: TextStyle(fontSize: 13),
+                      ),
+                      subtitle: TextButton(
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          alignment: Alignment.centerLeft,
+                          minimumSize: const Size(0, 28),
+                        ),
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const PrivacyPolicyScreen(),
+                          ),
+                        ),
+                        child: const Text('Read Privacy Policy'),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     _isLoading
-                        ? const CircularProgressIndicator()
+                        ? const CircularProgressIndicator.adaptive()
                         : MainAppButton(
                             text: 'Sign Up',
                             icon: Icons.person_add_alt_1,

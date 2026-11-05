@@ -1,3 +1,4 @@
+import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'dart:async';
 import 'package:carousel_slider/carousel_slider.dart';
 import 'package:flutter/material.dart';
@@ -5,6 +6,9 @@ import 'package:flutter_chess_app/providers/game_provider.dart';
 import 'package:flutter_chess_app/providers/settings_provider.dart';
 import 'package:flutter_chess_app/providers/user_provider.dart';
 import 'package:flutter_chess_app/screens/game_screen.dart';
+import 'package:flutter_chess_app/screens/daily_games_screen.dart';
+import 'package:flutter_chess_app/screens/clubs_screen.dart';
+import 'package:flutter_chess_app/screens/tournaments_screen.dart';
 import 'package:flutter_chess_app/widgets/monetization_ads_widget.dart'
     show MonetizationAdsWidget, MonetizationAdType;
 import 'package:flutter_chess_app/utils/constants.dart';
@@ -15,6 +19,7 @@ import 'package:flutter_chess_app/widgets/online_players_count_widget.dart';
 import 'package:flutter_chess_app/services/admin_service.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
+import '../widgets/daily_puzzle_card.dart';
 import '../widgets/game_mode_card.dart';
 import '../widgets/main_app_button.dart';
 import '../widgets/play_option_tile.dart';
@@ -65,16 +70,80 @@ class _PlayScreenState extends State<PlayScreen>
     });
   }
 
+  /// Modes to search in: the one tapped first, then every other mode the player
+  /// has left switched on in the online-modes settings (all of them by default).
+  List<String> _acceptedMatchModes(String primary) {
+    final settings = context.read<SettingsProvider>();
+    final modes = <String>[primary];
+    for (final m in _enabledGameModes) {
+      final tc = m[Constants.timeControl] as String;
+      if (!modes.contains(tc) && settings.isMatchModeIncluded(tc)) modes.add(tc);
+    }
+    return modes;
+  }
+
+  void _showMatchModesDialog() {
+    final all = _enabledGameModes
+        .map((m) => m[Constants.timeControl] as String)
+        .toList();
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Consumer<SettingsProvider>(
+          builder: (context, settings, _) {
+            return AlertDialog(
+              title: const Text('Online game modes'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Find opponents in all the modes you tick. More modes means a faster match; the game is played in a mode you both accept.',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final m in _enabledGameModes)
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('${m[Constants.title]}'),
+                        subtitle: Text('${m[Constants.timeControl]}'),
+                        value: settings.isMatchModeIncluded(
+                          m[Constants.timeControl] as String,
+                        ),
+                        onChanged: (v) => settings.setMatchModeIncluded(
+                          m[Constants.timeControl] as String,
+                          v ?? true,
+                          all,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Done'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _loadEnabledGameModes() async {
     try {
       final modes = await _adminService.getEnabledGameModes();
       if (mounted) {
         setState(() {
           _enabledGameModes = modes;
-          print('✅ Game modes loaded: ${modes.length} modes enabled');
+          dlog('✅ Game modes loaded: ${modes.length} modes enabled');
           // Display the modes for debugging
           for (var mode in modes) {
-            print(
+            dlog(
               '  - ${mode[Constants.title]} (${mode[Constants.timeControl]})',
             );
           }
@@ -91,7 +160,7 @@ class _PlayScreenState extends State<PlayScreen>
         setState(() {
           // Fallback to all modes if there's an error
           _enabledGameModes = Constants.gameModes;
-          print(
+          dlog(
             '⚠️  Using fallback: All ${Constants.gameModes.length} modes enabled',
           );
           _isInitializing = false;
@@ -125,7 +194,7 @@ class _PlayScreenState extends State<PlayScreen>
     final isSmallScreen = screenHeight < 700;
     final isVerySmallScreen = screenHeight < 600;
 
-    print('enabledGameModes: $_enabledGameModes');
+    dlog('enabledGameModes: $_enabledGameModes');
 
     // Show a subtle loading state during initialization or if modes are empty
     if (_isInitializing || _enabledGameModes.isEmpty) {
@@ -135,7 +204,7 @@ class _PlayScreenState extends State<PlayScreen>
             child: SizedBox(
               width: 24,
               height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
+              child: CircularProgressIndicator.adaptive(strokeWidth: 2),
             ),
           ),
         ),
@@ -162,11 +231,25 @@ class _PlayScreenState extends State<PlayScreen>
             final adSpacing = isVerySmallScreen ? 8.0 : 12.0;
 
             // Reserve space for buttons - ensure it fits
-            final reservedHeight =
+            final baseReservedHeight =
                 onlineCountHeight +
                 carouselHeight +
                 adContainerHeight +
                 adSpacing;
+
+            // Daily Puzzle card: shown only when the screen has room for it
+            // on top of everything else, so small phones never overflow.
+            const dailyCardHeight = 56.0;
+            const dailyCardSpacing = 8.0;
+            final showDailyCard =
+                availableHeight >=
+                baseReservedHeight +
+                    (isVerySmallScreen ? 150.0 : 160.0) +
+                    dailyCardHeight +
+                    dailyCardSpacing;
+            final reservedHeight =
+                baseReservedHeight +
+                (showDailyCard ? dailyCardHeight + dailyCardSpacing : 0.0);
             final remainingHeight = availableHeight - reservedHeight;
             final buttonAreaHeight = remainingHeight.clamp(
               isVerySmallScreen ? 150.0 : 160.0,
@@ -178,11 +261,31 @@ class _PlayScreenState extends State<PlayScreen>
                 // Online players count - Fixed height
                 SizedBox(
                   height: onlineCountHeight,
-                  child: OnlinePlayersCountWidget(
-                    selectedGameMode: _enabledGameModes.isEmpty
-                        ? null
-                        : _enabledGameModes[_selectedGameMode][Constants
-                              .timeControl],
+                  child: Stack(
+                    alignment: Alignment.center,
+                    clipBehavior: Clip.none,
+                    children: [
+                      OnlinePlayersCountWidget(
+                        selectedGameMode: _enabledGameModes.isEmpty
+                            ? null
+                            : _enabledGameModes[_selectedGameMode][Constants
+                                  .timeControl],
+                      ),
+                      Positioned(
+                        right: 4,
+                        child: IconButton(
+                          tooltip: 'Online game modes',
+                          icon: const Icon(Icons.tune),
+                          iconSize: 22,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 40,
+                            minHeight: 40,
+                          ),
+                          onPressed: _showMatchModesDialog,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
 
@@ -303,6 +406,14 @@ class _PlayScreenState extends State<PlayScreen>
                   ),
                 ),
 
+                if (showDailyCard) ...[
+                  const SizedBox(height: dailyCardSpacing),
+                  const SizedBox(
+                    height: dailyCardHeight,
+                    child: DailyPuzzleCard(),
+                  ),
+                ],
+
                 // Native Ad Container - Responsive height with padding
                 SizedBox(
                   height: adContainerHeight,
@@ -344,6 +455,7 @@ class _PlayScreenState extends State<PlayScreen>
                         subtitle: 'Play with players around the world',
                         icon: Icons.public,
                         accentColor: const Color(0xFF22C55E),
+                        ripple: true,
                         onPressed: () async {
                           if (_enabledGameModes.isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -421,6 +533,7 @@ class _PlayScreenState extends State<PlayScreen>
                               playerFlag: currentUser.countryCode ?? '',
                               userRating: userRating,
                               gameMode: timeControl,
+                              acceptedModes: _acceptedMatchModes(timeControl),
                               ratingBasedSearch: context
                                   .read<SettingsProvider>()
                                   .ratingBasedSearch,
@@ -449,6 +562,7 @@ class _PlayScreenState extends State<PlayScreen>
                                 await Future.delayed(
                                   const Duration(milliseconds: 500),
                                 );
+                                if (!context.mounted) return;
                                 // Navigate to GameScreen after game is ready
                                 Navigator.push(
                                   context,
@@ -569,6 +683,53 @@ class _PlayScreenState extends State<PlayScreen>
                       SizedBox(height: isVerySmallScreen ? 6 : 10),
                       ],
 
+                      if (_playFeatures['onlineEnabled'] == true && !widget.user.isGuest) ...[
+                      PlayOptionTile(
+                        title: 'Daily Games',
+                        subtitle: 'Slow games with friends, days per move',
+                        icon: Icons.calendar_month,
+                        accentColor: const Color(0xFFF59E0B),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => DailyGamesScreen(user: widget.user),
+                            ),
+                          );
+                        },
+                      ),
+                      SizedBox(height: isVerySmallScreen ? 6 : 10),
+                      PlayOptionTile(
+                        title: 'Tournaments',
+                        subtitle: 'Swiss or knockout, days per move',
+                        icon: Icons.emoji_events,
+                        accentColor: const Color(0xFFEAB308),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => TournamentsScreen(user: widget.user),
+                            ),
+                          );
+                        },
+                      ),
+                      SizedBox(height: isVerySmallScreen ? 6 : 10),
+                      PlayOptionTile(
+                        title: 'Clubs',
+                        subtitle: 'Join a club, weekly ranking, news',
+                        icon: Icons.groups,
+                        accentColor: const Color(0xFF14B8A6),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ClubsScreen(user: widget.user),
+                            ),
+                          );
+                        },
+                      ),
+                      SizedBox(height: isVerySmallScreen ? 6 : 10),
+                      ],
                       if (_playFeatures['localMultiplayerEnabled'] == true) ...[
                       PlayOptionTile(
                         title: 'Local Multiplayer',
