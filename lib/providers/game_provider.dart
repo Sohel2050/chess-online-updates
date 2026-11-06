@@ -64,6 +64,49 @@ class GameProvider extends ChangeNotifier {
   /// the position is unchanged; null otherwise.
   String? _hintUci;
   String? _hintFen;
+  /// Position the in-flight hint search was started for.
+  String? _hintRequestFen;
+
+  /// True when the hint button may be used: vs CPU, it is the human's turn,
+  /// and the engine is not busy with the CPU's own move.
+  bool get canRequestHint =>
+      _vsCPU &&
+          !_aiThinking &&
+          !_aiMoveRequestedForPlayer &&
+          !_coachBusy &&
+          !_game.gameOver &&
+          _game.state.turn == _player &&
+          _state.state != PlayState.theirTurn;
+
+  /// A hint is valid only if it is for the current position, it is the
+  /// human's turn there, and the moved piece belongs to the human.
+  bool _isHintValidFor(String fen, String uci) {
+    if (fen != _game.fen) return false;
+    final parts = fen.split(' ');
+    if (parts.length < 2) return false;
+    final turnIsWhite = parts[1] == 'w';
+    if (turnIsWhite != (_player == Squares.white)) return false;
+    final from = uci.substring(0, 2);
+    final file = from.codeUnitAt(0) - 97;
+    final rank = int.parse(from[1]); // 1..8
+    final rows = parts[0].split('/');
+    final row = rows[8 - rank];
+    var col = 0;
+    for (final ch in row.split('')) {
+      final n = int.tryParse(ch);
+      if (n != null) {
+        col += n;
+      } else {
+        if (col == file) {
+          final isWhitePiece = ch == ch.toUpperCase();
+          return isWhitePiece == (_player == Squares.white);
+        }
+        col++;
+      }
+    }
+    return false;
+  }
+
   String? get hintUci => (_hintUci != null && _hintFen == _game.fen) ? _hintUci : null;
   void clearHint() {
     if (_hintUci == null) return;
@@ -174,7 +217,7 @@ class GameProvider extends ChangeNotifier {
   /// audio-room listeners) can subscribe without going through
   /// `GameService`/Firestore directly.
   final StreamController<GameRoom> _onlineGameRoomController =
-      StreamController<GameRoom>.broadcast();
+  StreamController<GameRoom>.broadcast();
   Stream<GameRoom> get onlineGameRoomUpdates => _onlineGameRoomController.stream;
   StreamSubscription<List<ChessUser>>? _friendRequestSubscription;
 
@@ -184,9 +227,9 @@ class GameProvider extends ChangeNotifier {
   bool _takebackRejected = false; // Our takeback request was declined
   bool _rematchOfferSent = false; // Track if current user sent a rematch offer
   bool _rematchPending =
-      false; // Track if rematch is accepted and ready to start
+  false; // Track if rematch is accepted and ready to start
   bool _searchCancelled =
-      false; // Flag to track if online game search was cancelled
+  false; // Flag to track if online game search was cancelled
   bool _friendRequestReceived = false;
   String? _friendRequestSenderId;
   bool _scoresUpdatedForCurrentGame = false;
@@ -212,7 +255,7 @@ class GameProvider extends ChangeNotifier {
   // Audio player for timer tick sound
   late AudioPlayer _audioPlayer;
   Set<int> _playedTimerSounds =
-      {}; // Track which second thresholds have played audio
+  {}; // Track which second thresholds have played audio
   bool _audioPlayerInitialized = false;
 
   // Captured pieces
@@ -316,11 +359,11 @@ class GameProvider extends ChangeNotifier {
   /// Online game that is still running and has seen fewer than 2 plies: abort is possible (no result, no rating change).
   bool get canAbortOnline =>
       _isOnlineGame &&
-      !_localMultiplayer &&
-      _onlineGameRoom != null &&
-      _onlineGameRoom!.status == Constants.statusActive &&
-      _gameResultNotifier.value == null &&
-      _onlineGameRoom!.moves.length < 2;
+          !_localMultiplayer &&
+          _onlineGameRoom != null &&
+          _onlineGameRoom!.status == Constants.statusActive &&
+          _gameResultNotifier.value == null &&
+          _onlineGameRoom!.moves.length < 2;
 
   /// True when we have made a move that could be taken back and no request is open.
   bool get canOfferTakeback {
@@ -336,8 +379,8 @@ class GameProvider extends ChangeNotifier {
 
   bool get takebackOfferSent =>
       _onlineGameRoom != null &&
-      _onlineGameRoom!.takebackStatus == Constants.drawOfferStatusPending &&
-      _onlineGameRoom!.takebackOfferedBy == _myOnlineId;
+          _onlineGameRoom!.takebackStatus == Constants.drawOfferStatusPending &&
+          _onlineGameRoom!.takebackOfferedBy == _myOnlineId;
 
   bool get friendRequestReceived => _friendRequestReceived;
 
@@ -374,8 +417,8 @@ class GameProvider extends ChangeNotifier {
 
     final shouldShow =
         _onlineGameRoom!.status == Constants.statusActive &&
-        _onlineGameRoom!.moves.length <= 1 &&
-        !isGameOver; // Don't show countdown after game is over
+            _onlineGameRoom!.moves.length <= 1 &&
+            !isGameOver; // Don't show countdown after game is over
 
     if (shouldShow) {
       _logger.i(
@@ -416,7 +459,7 @@ class GameProvider extends ChangeNotifier {
         case 'q':
           points += 9;
           break;
-        // King has no point value in material calculation
+      // King has no point value in material calculation
       }
     }
     return points;
@@ -660,10 +703,10 @@ class GameProvider extends ChangeNotifier {
 
   /// Handles a friend request (accept or decline).
   Future<void> handleFriendRequest(
-    String currentUserId,
-    String friendUserId,
-    bool accepted,
-  ) async {
+      String currentUserId,
+      String friendUserId,
+      bool accepted,
+      ) async {
     if (accepted) {
       await _friendService.acceptFriendRequest(
         currentUserId: currentUserId,
@@ -702,9 +745,9 @@ class GameProvider extends ChangeNotifier {
 
   /// Handles an audio room invitation (accept or decline)
   Future<void> handleAudioRoomInvitation(
-    String currentUserId,
-    bool accepted,
-  ) async {
+      String currentUserId,
+      bool accepted,
+      ) async {
     if (!_isOnlineGame || _onlineGameRoom == null) {
       _logger.w('Cannot handle audio room invitation: Not an online game.');
       return;
@@ -766,7 +809,7 @@ class GameProvider extends ChangeNotifier {
   bool hasAudioRoomInvitation(String userId) {
     if (_onlineGameRoom == null) return false;
     return _onlineGameRoom!.audioRoomStatus ==
-            Constants.audioStatusInvitePending &&
+        Constants.audioStatusInvitePending &&
         _onlineGameRoom!.audioRoomInvitedBy != userId;
   }
 
@@ -1174,8 +1217,8 @@ class GameProvider extends ChangeNotifier {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               final String? userId = _isOnlineGame && _onlineGameRoom != null
                   ? (_isHost
-                        ? _onlineGameRoom!.player1Id
-                        : _onlineGameRoom!.player2Id)
+                  ? _onlineGameRoom!.player1Id
+                  : _onlineGameRoom!.player2Id)
                   : null;
               checkGameOver(userId: userId);
             });
@@ -1216,8 +1259,8 @@ class GameProvider extends ChangeNotifier {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               final String? userId = _isOnlineGame && _onlineGameRoom != null
                   ? (_isHost
-                        ? _onlineGameRoom!.player1Id
-                        : _onlineGameRoom!.player2Id)
+                  ? _onlineGameRoom!.player1Id
+                  : _onlineGameRoom!.player2Id)
                   : null;
               checkGameOver(userId: userId);
             });
@@ -1515,8 +1558,8 @@ class GameProvider extends ChangeNotifier {
         reason = _gameResultNotifier.value is WonGameResignation
             ? 'resignation'
             : _gameResultNotifier.value is WonGameTimeout
-                ? 'timeout'
-                : 'checkmate';
+            ? 'timeout'
+            : 'checkmate';
       } else if (_gameResultNotifier.value is bishop.DrawnGame) {
         reason = 'draw';
       }
@@ -1652,8 +1695,8 @@ class GameProvider extends ChangeNotifier {
 
         _logger.i(
           'Move sent to server for game: ${_onlineGameRoom!.gameId}, '
-          'move: ${move.toString()}, '
-          'fen: ${_game.fen}',
+              'move: ${move.toString()}, '
+              'fen: ${_game.fen}',
         );
       }
 
@@ -1710,15 +1753,15 @@ class GameProvider extends ChangeNotifier {
       String currentFEN = _game.fen;
 
       Map<String, List<String>> captured =
-          CapturedPiecesTracker.getCapturedPieces(currentFEN);
+      CapturedPiecesTracker.getCapturedPieces(currentFEN);
 
       _whiteCapturedPieces = captured['whiteCaptured']!;
       _blackCapturedPieces = captured['blackCaptured']!;
 
       _logger.i(
         'Captured pieces updated: '
-        'White captured: ${_whiteCapturedPieces.join(', ')}, '
-        'Black captured: ${_blackCapturedPieces.join(', ')}',
+            'White captured: ${_whiteCapturedPieces.join(', ')}, '
+            'Black captured: ${_blackCapturedPieces.join(', ')}',
       );
     } catch (e) {
       _logger.e('Error updating captured pieces: $e');
@@ -1882,10 +1925,23 @@ class GameProvider extends ChangeNotifier {
         coachWaits++;
       }
 
+      // A hint search may still be running (the player moved quickly): stop it
+      // and wait for its reply so it cannot be mixed up with the CPU's move.
+      if (_aiMoveRequestedForPlayer) {
+        _stockfish!.stdin = UCICommands.stop;
+        var hintWaits = 0;
+        while (_aiMoveRequestedForPlayer && hintWaits < 25) {
+          await Future.delayed(const Duration(milliseconds: 80));
+          hintWaits++;
+        }
+        _aiMoveRequestedForPlayer = false;
+        _hintRequestFen = null;
+      }
+
       // Check if it's AI's turn
       bool isAiTurn =
           _state.state == PlayState.theirTurn ||
-          (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
+              (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
 
       if (isAiTurn && !_aiThinking) {
         _logger.i('AI is thinking...');
@@ -1928,11 +1984,8 @@ class GameProvider extends ChangeNotifier {
       return; // already thinking (either for the CPU or for this request)
     }
 
-    final isAiTurn =
-        _state.state == PlayState.theirTurn ||
-        (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
-    if (isAiTurn) {
-      _logger.i('Not the player\'s turn, ignoring AI Move request');
+    if (!canRequestHint) {
+      _logger.i('Not the player\'s turn, ignoring hint request');
       return;
     }
 
@@ -1942,15 +1995,17 @@ class GameProvider extends ChangeNotifier {
       _logger.i('Hint requested: computing best move for the player...');
       _hintUci = null;
       _hintFen = null;
+      _hintRequestFen = _game.fen;
       _aiMoveRequestedForPlayer = true;
       notifyListeners();
 
-      _stockfish!.stdin = '${UCICommands.position} ${_game.fen}';
+      _stockfish!.stdin = '${UCICommands.position} $_hintRequestFen';
 
       // Always play at full strength for this — it's a move the player
       // explicitly asked the AI to make on their behalf, not the CPU
       // opponent's move (which is throttled by the selected difficulty).
       _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.skillLevel, 20);
+      _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.multiPV, 1);
       _stockfish!.stdin = '${UCICommands.goMoveTime} 1500';
     } catch (e) {
       _logger.e('Error requesting AI move for player: $e');
@@ -1996,7 +2051,7 @@ class GameProvider extends ChangeNotifier {
       // Check if it's AI's turn and not already thinking
       bool isAiTurn =
           _state.state == PlayState.theirTurn ||
-          (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
+              (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
 
       _logger.i('Is AI turn: $isAiTurn, AI thinking: $_aiThinking');
 
@@ -2010,12 +2065,18 @@ class GameProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        _logger.i('AI hint for player: $suggestedMove');
-        // Hint only: remember the move (shown as an arrow on the board while
-        // the position stays the same). The player makes the move themselves.
-        _hintUci = suggestedMove;
-        _hintFen = _game.fen;
+        final requestedFen = _hintRequestFen;
         _aiMoveRequestedForPlayer = false;
+        _hintRequestFen = null;
+        // Show it only if the position has not changed meanwhile and the move
+        // belongs to the human's side; otherwise drop it silently.
+        if (requestedFen != null && _isHintValidFor(requestedFen, suggestedMove)) {
+          _logger.i('AI hint for player: $suggestedMove');
+          _hintUci = suggestedMove;
+          _hintFen = requestedFen;
+        } else {
+          _logger.i('Discarded stale hint: $suggestedMove');
+        }
         notifyListeners();
         return;
       }
@@ -2150,16 +2211,16 @@ class GameProvider extends ChangeNotifier {
       _friendRequestSubscription = _friendService
           .getFriendRequests(userId)
           .listen((requests) {
-            final opponentId = _isHost
-                ? _onlineGameRoom?.player2Id
-                : _onlineGameRoom?.player1Id;
-            if (opponentId != null) {
-              final requestExists = requests.any((req) => req.uid == opponentId);
-              _friendRequestReceived = requestExists;
-              _friendRequestSenderId = requestExists ? opponentId : null;
-              notifyListeners();
-            }
-          });
+        final opponentId = _isHost
+            ? _onlineGameRoom?.player2Id
+            : _onlineGameRoom?.player1Id;
+        if (opponentId != null) {
+          final requestExists = requests.any((req) => req.uid == opponentId);
+          _friendRequestReceived = requestExists;
+          _friendRequestSenderId = requestExists ? opponentId : null;
+          notifyListeners();
+        }
+      });
     } catch (e) {
       _logger.e('Error during online game search/creation: $e');
       setLoading(false);
@@ -2296,13 +2357,13 @@ class GameProvider extends ChangeNotifier {
       final hasRematchOffer = updatedRoom.rematchOfferedBy != null;
       final rematchOfferCleared =
           _onlineGameRoom?.rematchOfferedBy != null &&
-          updatedRoom.rematchOfferedBy == null;
+              updatedRoom.rematchOfferedBy == null;
       final rematchBeingAccepted =
           updatedRoom.status == Constants.statusActive &&
-          updatedRoom.rematchOfferedBy == null;
+              updatedRoom.rematchOfferedBy == null;
       final hasDrawRejectionChange =
           (_onlineGameRoom?.drawOfferStatus != updatedRoom.drawOfferStatus) &&
-          updatedRoom.drawOfferStatus == Constants.drawOfferStatusRejected;
+              updatedRoom.drawOfferStatus == Constants.drawOfferStatusRejected;
 
       if (!hasRematchOffer &&
           !rematchOfferCleared &&
@@ -2550,8 +2611,8 @@ class GameProvider extends ChangeNotifier {
         : _onlineGameRoom!.player2Id;
     _drawOfferReceived =
         updatedRoom.drawOfferedBy != null &&
-        updatedRoom.drawOfferedBy != currentUserId &&
-        updatedRoom.drawOfferStatus == Constants.drawOfferStatusPending;
+            updatedRoom.drawOfferedBy != currentUserId &&
+            updatedRoom.drawOfferStatus == Constants.drawOfferStatusPending;
 
     if (_drawOfferReceived) {
       _logger.i(
@@ -2578,8 +2639,8 @@ class GameProvider extends ChangeNotifier {
     // Takeback requests (same shape as draw offers)
     _takebackReceived =
         updatedRoom.takebackOfferedBy != null &&
-        updatedRoom.takebackOfferedBy != currentUserId &&
-        updatedRoom.takebackStatus == Constants.drawOfferStatusPending;
+            updatedRoom.takebackOfferedBy != currentUserId &&
+            updatedRoom.takebackStatus == Constants.drawOfferStatusPending;
     if (updatedRoom.takebackStatus == Constants.drawOfferStatusRejected &&
         updatedRoom.takebackOfferedBy == currentUserId &&
         previousTakebackStatus != Constants.drawOfferStatusRejected) {
@@ -2754,10 +2815,10 @@ class GameProvider extends ChangeNotifier {
   }
 
   void updateLoadingMessage(
-    BuildContext context,
-    String message, {
-    bool showCancelButton = false,
-  }) {
+      BuildContext context,
+      String message, {
+        bool showCancelButton = false,
+      }) {
     if (context.mounted) {
       LoadingDialog.updateMessage(
         context,
@@ -2948,9 +3009,9 @@ class GameProvider extends ChangeNotifier {
 
   /// Deletes all chat messages between two users.
   Future<void> deleteChatMessages(
-    String currentUserId,
-    String otherUserId,
-  ) async {
+      String currentUserId,
+      String otherUserId,
+      ) async {
     try {
       await _chatService.deleteChatMessages(currentUserId, otherUserId);
       _logger.i(

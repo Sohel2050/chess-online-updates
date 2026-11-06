@@ -218,14 +218,14 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
 
       debugPrint(
         'User move SAN: ${move.algebraic()}, expected UCI: $expectedUci, '
-            'matched: $matchedExpectedMove',
+        'matched: $matchedExpectedMove',
       );
       final isValidMove = expectedUci != null && matchedExpectedMove
           ? await _puzzleProvider.makeMove(
-        expectedUci,
-        isUserMove: _movePattern.isUserMove,
-        expectedUserMoves: _movePattern.expectedUserMoves,
-      )
+              expectedUci,
+              isUserMove: _movePattern.isUserMove,
+              expectedUserMoves: _movePattern.expectedUserMoves,
+            )
           : false;
 
       if (isValidMove) {
@@ -539,11 +539,11 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         final ratedStreak = context.read<StreakProvider>();
         RatedPuzzleService()
             .submitResult(
-          widget.ratedAttemptId!,
-          solved: true,
-          moves: List<String>.from(session.userMoves),
-          dateKey: PuzzleService.localDateKey(),
-        )
+              widget.ratedAttemptId!,
+              solved: true,
+              moves: List<String>.from(session.userMoves),
+              dateKey: PuzzleService.localDateKey(),
+            )
             .then((r) {
           if (r != null) _showRatingChange(r);
           ratedStreak.refresh();
@@ -566,10 +566,10 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     }
     if (!_isRated && !_isPersonal) PuzzleService()
         .solvePuzzle(
-      widget.puzzle.id,
-      List<String>.from(session.userMoves),
-      widget.dailyDateKey ?? PuzzleService.localDateKey(),
-    )
+          widget.puzzle.id,
+          List<String>.from(session.userMoves),
+          widget.dailyDateKey ?? PuzzleService.localDateKey(),
+        )
         .then((_) {
       streakProvider.refresh();
       missionProvider.refresh();
@@ -596,7 +596,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         await _nextPuzzle();
         break;
       case null:
-      // Dialog was dismissed without action
+        // Dialog was dismissed without action
         break;
     }
   }
@@ -966,7 +966,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                           // Overlay for visual hints
                           if (_showVisualHint)
                             ..._highlightedSquares.map(
-                                  (square) => _HintOverlay(squareIndex: square),
+                              (square) => _HintOverlay(squareIndex: square),
                             ),
                         ],
                       ),
@@ -983,7 +983,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                       builder: (context, puzzleProvider, child) {
                         final wrong =
                             puzzleProvider.currentSession?.hasIncorrectMove ??
-                                false;
+                            false;
                         return OutlinedButton.icon(
                           onPressed: _isPlayingSolution ? null : _playSolution,
                           icon: const Icon(Icons.play_arrow),

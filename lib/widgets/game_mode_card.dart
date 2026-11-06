@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
+import 'package:flutter_chess_app/widgets/mode_live_stats.dart';
 
 class GameModeCard extends StatelessWidget {
   final String title;
@@ -7,12 +8,16 @@ class GameModeCard extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
 
+  /// Show this mode's live waiting / running-games counters on the card.
+  final bool showLiveStats;
+
   const GameModeCard({
     super.key,
     required this.title,
     required this.timeControl,
     this.isSelected = false,
     required this.onTap,
+    this.showLiveStats = false,
   });
 
   @override
@@ -84,45 +89,51 @@ class GameModeCard extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(20.0),
             child: Stack(
-            children: [
-              Positioned(
-                right: -10,
-                top: -6,
-                child: Icon(
-                  icon,
-                  size: isSmallScreen ? 90 : 120,
-                  color: Colors.white.withValues(alpha: 0.18),
-                ),
-              ),
-              Positioned.fill(
-                child: Padding(
-            padding: EdgeInsets.all(isSmallScreen ? 12.0 : 16.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                    fontSize: isSmallScreen ? 18 : null,
+                Positioned(
+                  right: -10,
+                  top: -6,
+                  child: Icon(
+                    icon,
+                    size: isSmallScreen ? 90 : 120,
+                    color: Colors.white.withValues(alpha: 0.18),
                   ),
                 ),
-                SizedBox(height: isSmallScreen ? 2 : 4),
-                Text(
-                  timeControl,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.8),
-                    fontSize: isSmallScreen ? 12 : null,
+                if (showLiveStats)
+                  Positioned(
+                    left: 8,
+                    top: 8,
+                    child: ModeLiveStats(gameMode: timeControl),
+                  ),
+                Positioned.fill(
+                  child: Padding(
+                    padding: EdgeInsets.all(isSmallScreen ? 12.0 : 16.0),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Text(
+                          title,
+                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            fontSize: isSmallScreen ? 18 : null,
+                          ),
+                        ),
+                        SizedBox(height: isSmallScreen ? 2 : 4),
+                        Text(
+                          timeControl,
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: isSmallScreen ? 12 : null,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
-          ),
-              ),
-            ],
-          ),
           ),
         ),
       ),

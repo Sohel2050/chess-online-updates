@@ -223,25 +223,25 @@ class Constants {
       'name': 'Beginner',
       'level': 0,
       'description': 'Very easy - learns basics',
-      'icon': Icons.sentiment_very_satisfied,
+      'icon': Icons.school_rounded,
     },
     {
       'name': 'Easy',
       'level': 1,
       'description': 'Good for beginners',
-      'icon': Icons.sentiment_satisfied,
+      'icon': Icons.thumb_up_alt_rounded,
     },
     {
       'name': 'Normal',
       'level': 2,
       'description': 'Balanced gameplay',
-      'icon': Icons.sentiment_neutral,
+      'icon': Icons.balance_rounded,
     },
     {
       'name': 'Hard',
       'level': 3,
       'description': 'Challenging opponent',
-      'icon': Icons.sentiment_very_dissatisfied,
+      'icon': Icons.local_fire_department_rounded,
     },
   ];
 

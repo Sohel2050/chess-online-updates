@@ -53,11 +53,9 @@ class _OnlinePlayersCountWidgetState extends State<OnlinePlayersCountWidget> {
           builder: (context, snapshot) {
             final stats = snapshot.data;
             final online = stats?['online'] ?? 0;
-            final waiting = stats?['waiting'] ?? 0;
-            final games = stats?['games'] ?? 0;
             final isLoading =
                 snapshot.connectionState == ConnectionState.waiting &&
-                !snapshot.hasData;
+                    !snapshot.hasData;
 
             if (isLoading) {
               return SizedBox(
@@ -70,10 +68,6 @@ class _OnlinePlayersCountWidgetState extends State<OnlinePlayersCountWidget> {
               );
             }
 
-            final waitingLabel = widget.selectedGameMode != null
-                ? 'Waiting (${_gameModeShortName(widget.selectedGameMode!)})'
-                : 'Waiting';
-
             return Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -83,39 +77,12 @@ class _OnlinePlayersCountWidgetState extends State<OnlinePlayersCountWidget> {
                   label: 'Online',
                   color: onContainer,
                 ),
-                const SizedBox(width: 10),
-                _StatChip(
-                  icon: Icons.hourglass_top_rounded,
-                  count: waiting,
-                  label: waitingLabel,
-                  color: onContainer,
-                ),
-                const SizedBox(width: 10),
-                _StatChip(
-                  icon: Icons.sports_esports,
-                  count: games,
-                  label: 'Games',
-                  color: onContainer,
-                ),
               ],
             );
           },
         ),
       ),
     );
-  }
-
-  String _gameModeShortName(String timeControl) {
-    switch (timeControl) {
-      case '30 sec/move':
-        return 'Fast';
-      case '60 sec/move':
-        return 'Classical';
-      case '3 min + 5s bonus 3s':
-        return 'Blitz';
-      default:
-        return timeControl;
-    }
   }
 }
 

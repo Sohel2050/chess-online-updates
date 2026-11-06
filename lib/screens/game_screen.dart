@@ -134,18 +134,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // Re-establish the subscription if it's null (e.g., provider was disposed and re-created)
         _gameProvider.gameRoomSubscription = _gameProvider.onlineGameRoomUpdates
             .listen(
-              _gameProvider.onOnlineGameRoomUpdate,
-              onError: (error) {
-                _gameProvider.logger.e(
-                  'Error re-streaming game room ${_gameProvider.onlineGameRoom!.gameId}: $error',
-                );
-              },
-              onDone: () {
-                _gameProvider.logger.i(
-                  'Game room ${_gameProvider.onlineGameRoom!.gameId} stream closed (re-established).',
-                );
-              },
+          _gameProvider.onOnlineGameRoomUpdate,
+          onError: (error) {
+            _gameProvider.logger.e(
+              'Error re-streaming game room ${_gameProvider.onlineGameRoom!.gameId}: $error',
             );
+          },
+          onDone: () {
+            _gameProvider.logger.i(
+              'Game room ${_gameProvider.onlineGameRoom!.gameId} stream closed (re-established).',
+            );
+          },
+        );
         _gameProvider.logger.i(
           'Re-established game room subscription in GameScreen.initState',
         );
@@ -223,7 +223,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (_gameProvider.onlineGameRoom == null) return;
 
     _audioRoomSubscription = _gameProvider.onlineGameRoomUpdates.listen(
-      (gameRoom) => _handleAudioRoomUpdates(gameRoom),
+          (gameRoom) => _handleAudioRoomUpdates(gameRoom),
       onError: (error) {
         _gameProvider.logger.e(
           'Error listening to audio room updates: $error',
@@ -236,7 +236,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (_gameProvider.onlineGameRoom == null) return;
 
     final opponentId =
-        _gameProvider.onlineGameRoom!.player1Id == widget.user.uid
+    _gameProvider.onlineGameRoom!.player1Id == widget.user.uid
         ? _gameProvider.onlineGameRoom!.player2Id
         : _gameProvider.onlineGameRoom!.player1Id;
 
@@ -250,14 +250,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     _unreadMessageSubscription = _gameProvider.chatService
         .getUnreadMessageCount(chatRoomId, widget.user.uid!)
         .listen((unreadCount) {
-          // Play sound only when unread count increases (new message received)
-          if (unreadCount > _previousUnreadCount) {
-            dlog('📨 New message received - unread count: $unreadCount');
-            _playMessageSound();
-            _flyMessageToChatIcon();
-          }
-          _previousUnreadCount = unreadCount;
-        });
+      // Play sound only when unread count increases (new message received)
+      if (unreadCount > _previousUnreadCount) {
+        dlog('📨 New message received - unread count: $unreadCount');
+        _playMessageSound();
+        _flyMessageToChatIcon();
+      }
+      _previousUnreadCount = unreadCount;
+    });
   }
 
   final GlobalKey _chatIconKey = GlobalKey();
@@ -362,17 +362,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // Get inviting user details
     final invitingUser = gameRoom.player1Id == invitingUserId
         ? ChessUser(
-            uid: gameRoom.player1Id,
-            displayName: gameRoom.player1DisplayName,
-            photoUrl: gameRoom.player1PhotoUrl,
-            countryCode: gameRoom.player1Flag,
-          )
+      uid: gameRoom.player1Id,
+      displayName: gameRoom.player1DisplayName,
+      photoUrl: gameRoom.player1PhotoUrl,
+      countryCode: gameRoom.player1Flag,
+    )
         : ChessUser(
-            uid: gameRoom.player2Id,
-            displayName: gameRoom.player2DisplayName ?? 'Opponent',
-            photoUrl: gameRoom.player2PhotoUrl,
-            countryCode: gameRoom.player2Flag,
-          );
+      uid: gameRoom.player2Id,
+      displayName: gameRoom.player2DisplayName ?? 'Opponent',
+      photoUrl: gameRoom.player2PhotoUrl,
+      countryCode: gameRoom.player2Flag,
+    );
 
     final result = await AudioRoomInvitationDialog.show(
       context: context,
@@ -395,8 +395,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       SnackBar(
         content: Row(
           children: [
-            Icon(Icons.mic, color: Colors.white),
-            SizedBox(width: 8),
+            _assetIcon(AssetsManager.micIcon, 24, Icons.mic),
+            const SizedBox(width: 8),
             Expanded(child: Text('$invitingUserName started audio room')),
           ],
         ),
@@ -715,8 +715,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _gameProvider.onlineGameRoom?.rematchOfferedBy != widget.user.uid) {
       // Get opponent name who offered the rematch
       final opponentName =
-          _gameProvider.onlineGameRoom!.player1Id ==
-              _gameProvider.onlineGameRoom!.rematchOfferedBy
+      _gameProvider.onlineGameRoom!.player1Id ==
+          _gameProvider.onlineGameRoom!.rematchOfferedBy
           ? _gameProvider.onlineGameRoom!.player1DisplayName
           : _gameProvider.onlineGameRoom!.player2DisplayName ?? 'Opponent';
 
@@ -746,7 +746,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _showRematchOffer = false;
       _rematchOffererName = null;
       _rematchExplicitlyAccepted =
-          true; // Mark that rematch was explicitly accepted
+      true; // Mark that rematch was explicitly accepted
     });
 
     final error = await _gameProvider.handleRematch(true);
@@ -872,8 +872,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Ads only run in online games, for users who should see ads.
   bool _endAdAllowed() =>
       mounted &&
-      _gameProvider.isOnlineGame &&
-      MonetizationService.shouldShowAds(context, widget.user);
+          _gameProvider.isOnlineGame &&
+          MonetizationService.shouldShowAds(context, widget.user);
 
   /// Game over: short pause (the player sees the final position), then the ad (once),
   /// then the Game Over dialog (Rematch / Review / New game). Nothing the player does
@@ -904,7 +904,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) =>
-          const Center(child: CircularProgressIndicator.adaptive()),
+      const Center(child: CircularProgressIndicator.adaptive()),
     );
     MonetizationService.showInterstitialAd(
       context: context,
@@ -1003,7 +1003,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
         switch (action) {
           case GameOverAction.rematch:
-            // Mark that rematch was explicitly accepted
+          // Mark that rematch was explicitly accepted
             setState(() {
               _rematchExplicitlyAccepted = true;
               _gameOverHandled = false;
@@ -1021,7 +1021,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             if (mounted) Navigator.of(context).pop();
             break;
           case GameOverAction.none:
-            // Do nothing
+          // Do nothing
             break;
         }
       });
@@ -1073,9 +1073,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   void _cancelPending() => setState(() {
-        _pendingMove = null;
-        _pendingFen = null;
-      });
+    _pendingMove = null;
+    _pendingFen = null;
+  });
 
   /// The board with the pending move drawn as an arrow (nothing extra when no move is pending).
   Widget _withPendingMove(GameProvider gp, Widget board) {
@@ -1168,7 +1168,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       icon: Icons.flag_rounded,
       child: const ConfirmationDialog(
         message:
-            'Quitting will end the game and count as a loss. You will lose rating points and lose the match. Are you sure?',
+        'Quitting will end the game and count as a loss. You will lose rating points and lose the match. Are you sure?',
         confirmButtonText: 'Quit & Lose',
         cancelButtonText: 'Cancel',
         isDestructive: true,
@@ -1236,7 +1236,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       maxWidth: 400,
       child: const ConfirmationDialog(
         message:
-            'Take back your last move?\n(Computer\'s response will also be undone)',
+        'Take back your last move?\n(Computer\'s response will also be undone)',
         confirmButtonText: 'Take Back',
         cancelButtonText: 'Cancel',
       ),
@@ -1360,21 +1360,32 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     onPressed: gameProvider.canUndo
                         ? _showUndoConfirmationDialog
                         : null,
-                    icon: const Icon(Icons.undo_rounded),
+                    icon: Opacity(
+                      opacity: gameProvider.canUndo ? 1 : 0.4,
+                      child: _assetIcon(
+                        AssetsManager.undoButton,
+                        30,
+                        Icons.undo_rounded,
+                      ),
+                    ),
                     tooltip: gameProvider.canUndo ? 'Undo move' : 'No move to undo',
                   ),
                 if (gameProvider.vsCPU)
                   IconButton(
-                    onPressed: (gameProvider.aiThinking || gameProvider.aiMoveRequestedForPlayer)
+                    onPressed: !gameProvider.canRequestHint
                         ? null
                         : () => gameProvider.requestAiMoveForCurrentPlayer(),
                     icon: gameProvider.aiMoveRequestedForPlayer
                         ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.lightbulb_outline_rounded),
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator.adaptive(strokeWidth: 2),
+                    )
+                        : _assetIcon(
+                      AssetsManager.aiThinking,
+                      30,
+                      Icons.lightbulb_outline_rounded,
+                    ),
                     tooltip: gameProvider.aiMoveRequestedForPlayer
                         ? 'Finding the best move...'
                         : 'Show best move hint',
@@ -1388,7 +1399,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 if (gameProvider.canOfferTakeback)
                   IconButton(
                     onPressed: _showTakebackOfferDialog,
-                    icon: const Icon(Icons.undo),
+                    icon: _assetIcon(AssetsManager.undoButton, 30, Icons.undo),
                     tooltip: 'Ask for takeback',
                   ),
                 if (gameProvider.canAbortOnline)
@@ -1420,11 +1431,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     onPressed: _showLiveSheet,
                     icon: Icon(
                       (gameProvider.onlineGameRoom!.publicWatch ||
-                              gameProvider.onlineGameRoom!.friendsWatch)
+                          gameProvider.onlineGameRoom!.friendsWatch)
                           ? Icons.live_tv
                           : Icons.live_tv_outlined,
                       color: (gameProvider.onlineGameRoom!.publicWatch ||
-                              gameProvider.onlineGameRoom!.friendsWatch)
+                          gameProvider.onlineGameRoom!.friendsWatch)
                           ? Colors.red
                           : null,
                     ),
@@ -1502,24 +1513,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       child: _withPendingMove(
                         gameProvider,
                         BoardController(
-                        state: gameProvider.flipBoard
-                            ? gameProvider.state.board.flipped()
-                            : gameProvider.state.board,
-                        playState: gameProvider.state.state,
-                        pieceSet: settingsProvider.getPieceSet(),
-                        theme: settingsProvider.effectiveBoardTheme,
-                        animatePieces: settingsProvider.animatePieces,
-                        labelConfig: settingsProvider.showLabels
-                            ? LabelConfig.standard
-                            : LabelConfig.disabled,
-                        moves: gameProvider.state.moves,
-                        onMove: _onMove,
-                        onPremove: _playMove,
-                        markerTheme: MarkerTheme(
-                          empty: MarkerTheme.dot,
-                          piece: MarkerTheme.corners(),
-                        ),
-                        promotionBehaviour: PromotionBehaviour.autoPremove,
+                          state: gameProvider.flipBoard
+                              ? gameProvider.state.board.flipped()
+                              : gameProvider.state.board,
+                          playState: gameProvider.state.state,
+                          pieceSet: settingsProvider.getPieceSet(),
+                          theme: settingsProvider.effectiveBoardTheme,
+                          animatePieces: settingsProvider.animatePieces,
+                          labelConfig: settingsProvider.showLabels
+                              ? LabelConfig.standard
+                              : LabelConfig.disabled,
+                          moves: gameProvider.state.moves,
+                          onMove: _onMove,
+                          onPremove: _playMove,
+                          markerTheme: MarkerTheme(
+                            empty: MarkerTheme.dot,
+                            piece: MarkerTheme.corners(),
+                          ),
+                          promotionBehaviour: PromotionBehaviour.autoPremove,
                         ),
                       ),
                     ),
@@ -1535,8 +1546,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                           onTimeout: () {
                             // Handle timeout by calling the GameProvider method
                             final winner =
-                                gameProvider.firstMoveCountdownPlayer ==
-                                    Squares.white
+                            gameProvider.firstMoveCountdownPlayer ==
+                                Squares.white
                                 ? Squares.black
                                 : Squares.white;
                             gameProvider.handleFirstMoveTimeout(winner: winner);
@@ -1675,8 +1686,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             final color = warning.mark == '??'
                                 ? Colors.red
                                 : warning.mark == '?'
-                                    ? Colors.deepOrange
-                                    : Colors.amber.shade800;
+                                ? Colors.deepOrange
+                                : Colors.amber.shade800;
                             return GestureDetector(
                               onTap: gameProvider.clearCoachWarning,
                               child: Container(
@@ -1712,14 +1723,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               ],
             ),
             bottomNavigationBar:
-                MonetizationService.shouldShowAds(context, widget.user)
+            MonetizationService.shouldShowAds(context, widget.user)
                 ? Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: MonetizationAdsWidget(
-                      user: widget.user,
-                      adType: MonetizationAdType.banner,
-                    ),
-                  )
+              margin: const EdgeInsets.only(bottom: 12),
+              child: MonetizationAdsWidget(
+                user: widget.user,
+                adType: MonetizationAdType.banner,
+              ),
+            )
                 : null,
           );
         },
@@ -1728,10 +1739,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Widget _opponentsDataAndTime(
-    BuildContext context,
-    GameProvider gameProvider,
-    SettingsProvider settingsProvider,
-  ) {
+      BuildContext context,
+      GameProvider gameProvider,
+      SettingsProvider settingsProvider,
+      ) {
     final int opponentColor = gameProvider.player == Squares.white
         ? Squares.black
         : Squares.white;
@@ -1788,14 +1799,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (!gameProvider.vsCPU)
-                  _buildCircularCountdownTimer(
-                    duration: gameProvider.player == Squares.white
-                        ? gameProvider.blacksTime
-                        : gameProvider.whitesTime,
-                    initialDuration: gameProvider.player == Squares.white
-                        ? gameProvider.savedBlacksTime
-                        : gameProvider.savedWhitesTime,
-                  ),
+                    _buildCircularCountdownTimer(
+                      duration: gameProvider.player == Squares.white
+                          ? gameProvider.blacksTime
+                          : gameProvider.whitesTime,
+                      initialDuration: gameProvider.player == Squares.white
+                          ? gameProvider.savedBlacksTime
+                          : gameProvider.savedWhitesTime,
+                    ),
                   const SizedBox(height: 4),
                   CapturedPiecesWidget(
                     capturedPieces: opponentCaptured,
@@ -1816,10 +1827,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Widget _onlineOpponentDataAndTime(
-    BuildContext context,
-    GameProvider gameProvider,
-    SettingsProvider settingsProvider,
-  ) {
+      BuildContext context,
+      GameProvider gameProvider,
+      SettingsProvider settingsProvider,
+      ) {
     final GameRoom? gameRoom = gameProvider.onlineGameRoom;
     if (gameRoom == null) {
       return const SizedBox(); // Should not happen in online game
@@ -1949,14 +1960,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (!gameProvider.vsCPU)
-                  _buildCircularCountdownTimer(
-                    duration: opponentColor == Squares.white
-                        ? gameProvider.whitesTime
-                        : gameProvider.blacksTime,
-                    initialDuration: opponentColor == Squares.white
-                        ? gameProvider.savedWhitesTime
-                        : gameProvider.savedBlacksTime,
-                  ),
+                    _buildCircularCountdownTimer(
+                      duration: opponentColor == Squares.white
+                          ? gameProvider.whitesTime
+                          : gameProvider.blacksTime,
+                      initialDuration: opponentColor == Squares.white
+                          ? gameProvider.savedWhitesTime
+                          : gameProvider.savedBlacksTime,
+                    ),
                   const SizedBox(height: 4),
                   CapturedPiecesWidget(
                     capturedPieces: opponentCaptured,
@@ -2013,10 +2024,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Widget _currentUserDataAndTime(
-    BuildContext context,
-    GameProvider gameProvider,
-    SettingsProvider settingsProvider,
-  ) {
+      BuildContext context,
+      GameProvider gameProvider,
+      SettingsProvider settingsProvider,
+      ) {
     final bool isPlayersTurn =
         gameProvider.game.state.turn == gameProvider.player;
     final List<String> playerCaptured = gameProvider.player == Squares.white
@@ -2048,15 +2059,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     children: [
                       Text(
                         gameProvider.isOnlineGame &&
-                                gameProvider.onlineGameRoom != null
+                            gameProvider.onlineGameRoom != null
                             ? (gameProvider.isHost
-                                  ? gameProvider
-                                        .onlineGameRoom!
-                                        .player1DisplayName
-                                  : gameProvider
-                                            .onlineGameRoom!
-                                            .player2DisplayName ??
-                                        widget.user.displayName)
+                            ? gameProvider
+                            .onlineGameRoom!
+                            .player1DisplayName
+                            : gameProvider
+                            .onlineGameRoom!
+                            .player2DisplayName ??
+                            widget.user.displayName)
                             : widget.user.displayName,
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
@@ -2078,49 +2089,49 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 child: gameProvider.vsCPU
                     ? _buildVsCpuControls(gameProvider)
                     : Builder(
-                        builder: (context) {
-                          // NOTE: the old ZegoProvider.isAudioFeatureEnabled
-                          // remote toggle is gone along with Firestore. Voice
-                          // chat is always considered "enabled" here for now;
-                          // add a backend `/admin/game-mode-settings`-style
-                          // flag later if you want to be able to turn it off
-                          // remotely again.
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (gameProvider.isOnlineGame) ...[
-                                if (_isInAudioRoom) ...[
-                                  AudioControlsWidget(
-                                    isInAudioRoom: _isInAudioRoom,
-                                    isMicrophoneEnabled: _isMicrophoneEnabled,
-                                    isSpeakerMuted: _isSpeakerMuted,
-                                    participants: gameProvider
-                                        .getAudioRoomParticipants(),
-                                    onToggleMicrophone: _toggleMicrophone,
-                                    onToggleSpeaker: _toggleSpeakerMute,
-                                    onLeaveAudio: _leaveAudioRoom,
-                                  ),
-                                ] else ...[
-                                  GestureDetector(
-                                    onTap: _showAudioRoomInvitationDialog,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primaryContainer
-                                            .withAlpha(77),
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: _assetIcon(AssetsManager.micIcon, 26, Icons.mic),
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ],
-                          );
-                        },
-                      ),
+                  builder: (context) {
+                    // NOTE: the old ZegoProvider.isAudioFeatureEnabled
+                    // remote toggle is gone along with Firestore. Voice
+                    // chat is always considered "enabled" here for now;
+                    // add a backend `/admin/game-mode-settings`-style
+                    // flag later if you want to be able to turn it off
+                    // remotely again.
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (gameProvider.isOnlineGame) ...[
+                          if (_isInAudioRoom) ...[
+                            AudioControlsWidget(
+                              isInAudioRoom: _isInAudioRoom,
+                              isMicrophoneEnabled: _isMicrophoneEnabled,
+                              isSpeakerMuted: _isSpeakerMuted,
+                              participants: gameProvider
+                                  .getAudioRoomParticipants(),
+                              onToggleMicrophone: _toggleMicrophone,
+                              onToggleSpeaker: _toggleSpeakerMute,
+                              onLeaveAudio: _leaveAudioRoom,
+                            ),
+                          ] else ...[
+                            GestureDetector(
+                              onTap: _showAudioRoomInvitationDialog,
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primaryContainer
+                                      .withAlpha(77),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: _assetIcon(AssetsManager.micIcon, 26, Icons.mic),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ],
+                    );
+                  },
+                ),
               ),
 
               // Captured pieces and timer (right side)
@@ -2128,14 +2139,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (!gameProvider.vsCPU)
-                  _buildCircularCountdownTimer(
-                    duration: gameProvider.player == Squares.white
-                        ? gameProvider.whitesTime
-                        : gameProvider.blacksTime,
-                    initialDuration: gameProvider.player == Squares.white
-                        ? gameProvider.savedWhitesTime
-                        : gameProvider.savedBlacksTime,
-                  ),
+                    _buildCircularCountdownTimer(
+                      duration: gameProvider.player == Squares.white
+                          ? gameProvider.whitesTime
+                          : gameProvider.blacksTime,
+                      initialDuration: gameProvider.player == Squares.white
+                          ? gameProvider.savedWhitesTime
+                          : gameProvider.savedBlacksTime,
+                    ),
                   const SizedBox(height: 4),
                   CapturedPiecesWidget(
                     capturedPieces: playerCaptured,
@@ -2155,7 +2166,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// VS Computer-only controls, placed beside the local player's details.
   /// Shows an image asset, falling back to a Material icon if it is missing.
   Widget _assetIcon(String path, double size, IconData fallback) {
     return Image.asset(
@@ -2316,7 +2326,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
       final roomID =
           _gameProvider.onlineGameRoom?.gameId ??
-          'room_${DateTime.now().millisecondsSinceEpoch}';
+              'room_${DateTime.now().millisecondsSinceEpoch}';
 
       // Step 1: get a signed access token from our own backend (never talk
       // to LiveKit's control plane directly from the app).
@@ -2427,7 +2437,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     try {
       _gameProvider.logger.i(
         'Audio states synced: mic=${_isMicrophoneEnabled ? 'enabled' : 'disabled'}, '
-        'speaker=${_isSpeakerMuted ? 'muted' : 'unmuted'}',
+            'speaker=${_isSpeakerMuted ? 'muted' : 'unmuted'}',
       );
     } catch (e) {
       _gameProvider.logger.w('Failed to sync audio states: $e');
@@ -2436,10 +2446,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Handle audio control failures with appropriate user feedback and recovery
   void _handleAudioControlFailure(
-    String operation,
-    dynamic error,
-    bool revertToState,
-  ) {
+      String operation,
+      dynamic error,
+      bool revertToState,
+      ) {
     _gameProvider.logger.e('Audio control failure - $operation: $error');
 
     if (mounted) {
@@ -2450,11 +2460,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       } else if (error.toString().contains('network') ||
           error.toString().contains('connection')) {
         userMessage =
-            'Network error. Please check your connection and try again';
+        'Network error. Please check your connection and try again';
       } else if (error.toString().contains('engine') ||
           error.toString().contains('initialize')) {
         userMessage =
-            'Voice chat not ready. Please try rejoining the audio room';
+        'Voice chat not ready. Please try rejoining the audio room';
       } else {
         userMessage = 'Failed to $operation. Please try again';
       }
@@ -2618,11 +2628,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            Icons.mic,
-            size: 48,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+          _assetIcon(AssetsManager.micIcon, 64, Icons.mic),
           const SizedBox(height: 16),
           const Text(
             'Invite your opponent to voice chat',
@@ -2717,14 +2723,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Widget _localMultiplayerOpponentDataAndTime(
-    BuildContext context,
-    GameProvider gameProvider,
-    SettingsProvider settingsProvider,
-  ) {
+      BuildContext context,
+      GameProvider gameProvider,
+      SettingsProvider settingsProvider,
+      ) {
     final bool isOpponentWhite = gameProvider.player == Squares.black;
     final bool isOpponentsTurn =
         gameProvider.game.state.turn ==
-        (isOpponentWhite ? Squares.white : Squares.black);
+            (isOpponentWhite ? Squares.white : Squares.black);
     final List<String> opponentCaptured = isOpponentWhite
         ? gameProvider.whiteCapturedPieces
         : gameProvider.blackCapturedPieces;
@@ -2775,14 +2781,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (!gameProvider.vsCPU)
-                  _buildCircularCountdownTimer(
-                    duration: gameProvider.player == Squares.white
-                        ? gameProvider.blacksTime
-                        : gameProvider.whitesTime,
-                    initialDuration: gameProvider.player == Squares.white
-                        ? gameProvider.savedBlacksTime
-                        : gameProvider.savedWhitesTime,
-                  ),
+                    _buildCircularCountdownTimer(
+                      duration: gameProvider.player == Squares.white
+                          ? gameProvider.blacksTime
+                          : gameProvider.whitesTime,
+                      initialDuration: gameProvider.player == Squares.white
+                          ? gameProvider.savedBlacksTime
+                          : gameProvider.savedWhitesTime,
+                    ),
                   const SizedBox(height: 4),
                   CapturedPiecesWidget(
                     capturedPieces: opponentCaptured,
@@ -2803,14 +2809,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Widget _localMultiplayerCurrentUserDataAndTime(
-    BuildContext context,
-    GameProvider gameProvider,
-    SettingsProvider settingsProvider,
-  ) {
+      BuildContext context,
+      GameProvider gameProvider,
+      SettingsProvider settingsProvider,
+      ) {
     final bool isPlayerWhite = gameProvider.player == Squares.white;
     final bool isPlayersTurn =
         gameProvider.game.state.turn ==
-        (isPlayerWhite ? Squares.white : Squares.black);
+            (isPlayerWhite ? Squares.white : Squares.black);
     final List<String> playerCaptured = isPlayerWhite
         ? gameProvider.whiteCapturedPieces
         : gameProvider.blackCapturedPieces;
@@ -2855,14 +2861,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   if (!gameProvider.vsCPU)
-                  _buildCircularCountdownTimer(
-                    duration: gameProvider.player == Squares.white
-                        ? gameProvider.whitesTime
-                        : gameProvider.blacksTime,
-                    initialDuration: gameProvider.player == Squares.white
-                        ? gameProvider.savedWhitesTime
-                        : gameProvider.savedBlacksTime,
-                  ),
+                    _buildCircularCountdownTimer(
+                      duration: gameProvider.player == Squares.white
+                          ? gameProvider.whitesTime
+                          : gameProvider.blacksTime,
+                      initialDuration: gameProvider.player == Squares.white
+                          ? gameProvider.savedWhitesTime
+                          : gameProvider.savedBlacksTime,
+                    ),
                   const SizedBox(height: 4),
                   CapturedPiecesWidget(
                     capturedPieces: playerCaptured,
@@ -2885,17 +2891,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _showInGameChat(BuildContext context, GameProvider gameProvider) {
     final opponent = gameProvider.onlineGameRoom?.player1Id == widget.user.uid
         ? ChessUser(
-            uid: gameProvider.onlineGameRoom?.player2Id,
-            displayName:
-                gameProvider.onlineGameRoom?.player2DisplayName ?? 'Opponent',
-            photoUrl: gameProvider.onlineGameRoom?.player2PhotoUrl,
-          )
+      uid: gameProvider.onlineGameRoom?.player2Id,
+      displayName:
+      gameProvider.onlineGameRoom?.player2DisplayName ?? 'Opponent',
+      photoUrl: gameProvider.onlineGameRoom?.player2PhotoUrl,
+    )
         : ChessUser(
-            uid: gameProvider.onlineGameRoom?.player1Id,
-            displayName:
-                gameProvider.onlineGameRoom?.player1DisplayName ?? 'Opponent',
-            photoUrl: gameProvider.onlineGameRoom?.player1PhotoUrl,
-          );
+      uid: gameProvider.onlineGameRoom?.player1Id,
+      displayName:
+      gameProvider.onlineGameRoom?.player1DisplayName ?? 'Opponent',
+      photoUrl: gameProvider.onlineGameRoom?.player1PhotoUrl,
+    );
 
     showModalBottomSheet(
       context: context,

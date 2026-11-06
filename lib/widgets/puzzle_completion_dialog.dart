@@ -333,12 +333,12 @@ class PuzzleCompletionDialog extends StatelessWidget {
   }
 
   Widget _statTile(
-      BuildContext context, {
-        required IconData icon,
-        required String value,
-        required String label,
-        required Color color,
-      }) {
+    BuildContext context, {
+    required IconData icon,
+    required String value,
+    required String label,
+    required Color color,
+  }) {
     final theme = Theme.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
@@ -413,7 +413,7 @@ class PuzzleCompletionDialog extends StatelessWidget {
     final theme = Theme.of(context);
     final primaryLabel = hasNextPuzzle ? 'Next Puzzle' : 'Try Again';
     final primaryIcon =
-    hasNextPuzzle ? Icons.arrow_forward_rounded : Icons.refresh_rounded;
+        hasNextPuzzle ? Icons.arrow_forward_rounded : Icons.refresh_rounded;
     final primaryAction = hasNextPuzzle ? onNextPuzzle : onRetry;
 
     return Padding(
