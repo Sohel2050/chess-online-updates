@@ -127,23 +127,9 @@ class PuzzleSession {
   /// as they have a solution — see PuzzleService.getNextHint.
   bool get hasMoreHints => hintsUsed < puzzle.effectiveHintCount;
 
-  /// Get the next move in the solution
-  String? get nextMove {
-    if (currentMoveIndex < puzzle.solution.length) {
-      return puzzle.solution[currentMoveIndex];
-    }
-    return null;
-  }
-
-  /// Get the source square for the next move
-  String? get nextMoveSourceSquare {
-    final move = nextMove;
-    if (move != null && move.length >= 2) {
-      // Extract the source square (first two characters)
-      return move.substring(0, 2);
-    }
-    return null;
-  }
+  // Note: `currentMoveIndex` counts the PLAYER's correct moves only, not
+  // solution plies (opponent moves are interleaved), so it must not be used
+  // to index `puzzle.solution`. The board screen tracks plies itself.
 }
 
 /// Provider for managing puzzle state and user interactions

@@ -29,7 +29,11 @@ class AvatarSelectionDialog extends StatelessWidget {
         final avatar = AssetsManager.avatars[index];
         return GestureDetector(
           onTap: () => Navigator.of(context).pop(avatar),
-          child: CircleAvatar(backgroundImage: AssetImage(avatar)),
+          child: CircleAvatar(
+            child: const Icon(Icons.person),
+            foregroundImage: AssetImage(avatar),
+            onForegroundImageError: (_, _) {},
+          ),
         );
       },
     );

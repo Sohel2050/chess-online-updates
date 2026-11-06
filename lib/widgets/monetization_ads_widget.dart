@@ -20,10 +20,16 @@ class MonetizationAdsWidget extends StatefulWidget {
   final ChessUser? user;
   final MonetizationAdType adType;
 
+  /// Called with `true` when an ad is (or can be) shown and `false` when the
+  /// slot should be hidden (ads disabled, SDK not ready in time, or the ad
+  /// failed to load). Lets a screen collapse the empty slot.
+  final ValueChanged<bool>? onVisibilityChanged;
+
   const MonetizationAdsWidget({
     super.key,
     this.user,
     this.adType = MonetizationAdType.banner,
+    this.onVisibilityChanged,
   });
 
   @override
@@ -36,6 +42,17 @@ class _MonetizationAdsWidgetState extends State<MonetizationAdsWidget> {
 
   bool _sdkReady = LevelPlayService.isInitialized;
   Timer? _readyTimer;
+  bool? _lastReported;
+
+  void _report(bool visible) {
+    if (_lastReported == visible) return;
+    _lastReported = visible;
+    final cb = widget.onVisibilityChanged;
+    if (cb == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) cb(visible);
+    });
+  }
 
   @override
   void initState() {
@@ -50,6 +67,7 @@ class _MonetizationAdsWidgetState extends State<MonetizationAdsWidget> {
           if (mounted) setState(() => _sdkReady = true);
         } else if (tries >= 30) {
           t.cancel();
+          _report(false); // SDK never became ready: hide the slot
         }
       });
     }
@@ -69,16 +87,24 @@ class _MonetizationAdsWidgetState extends State<MonetizationAdsWidget> {
             monetization.isAdsDisabled ||
             premium.isPremium ||
             widget.user?.removeAds == true) {
+          _report(false);
           return const SizedBox.shrink();
         }
 
         final typeEnabled = widget.adType == MonetizationAdType.banner
             ? monetization.bannerAdsEnabled
             : monetization.nativeAdsEnabled;
-        if (!typeEnabled || !_sdkReady) return const SizedBox.shrink();
+        if (!typeEnabled) {
+          _report(false);
+          return const SizedBox.shrink();
+        }
+        if (!_sdkReady) return const SizedBox.shrink(); // still starting
 
         final config = LevelPlayService.config;
-        if (config == null) return const SizedBox.shrink();
+        if (config == null) {
+          _report(false);
+          return const SizedBox.shrink();
+        }
 
         if (widget.adType == MonetizationAdType.native) {
           return LayoutBuilder(
@@ -91,13 +117,23 @@ class _MonetizationAdsWidgetState extends State<MonetizationAdsWidget> {
                   placement: config.nativePlacement,
                   height: _nativeHeight,
                   width: _nativeWidth,
+                  onLoaded: () => _report(true),
+                  onFailed: () => _report(false),
                 );
               }
-              return _BannerAdView(adUnitId: config.bannerId);
+              return _BannerAdView(
+                adUnitId: config.bannerId,
+                onLoaded: () => _report(true),
+                onFailed: () => _report(false),
+              );
             },
           );
         }
-        return _BannerAdView(adUnitId: config.bannerId);
+        return _BannerAdView(
+          adUnitId: config.bannerId,
+          onLoaded: () => _report(true),
+          onFailed: () => _report(false),
+        );
       },
     );
   }
@@ -105,7 +141,9 @@ class _MonetizationAdsWidgetState extends State<MonetizationAdsWidget> {
 
 class _BannerAdView extends StatefulWidget {
   final String adUnitId;
-  const _BannerAdView({required this.adUnitId});
+  final VoidCallback? onLoaded;
+  final VoidCallback? onFailed;
+  const _BannerAdView({required this.adUnitId, this.onLoaded, this.onFailed});
 
   @override
   State<_BannerAdView> createState() => _BannerAdViewState();
@@ -153,10 +191,11 @@ class _BannerAdViewState extends State<_BannerAdView>
   }
 
   @override
-  void onAdLoaded(LevelPlayAdInfo adInfo) {}
+  void onAdLoaded(LevelPlayAdInfo adInfo) => widget.onLoaded?.call();
   @override
   void onAdLoadFailed(LevelPlayAdError error) {
     debugPrint('LevelPlay banner failed: $error');
+    widget.onFailed?.call();
   }
 
   @override
@@ -177,10 +216,14 @@ class _NativeAdView extends StatefulWidget {
   final String placement;
   final double height;
   final double width;
+  final VoidCallback? onLoaded;
+  final VoidCallback? onFailed;
   const _NativeAdView({
     required this.placement,
     required this.height,
     required this.width,
+    this.onLoaded,
+    this.onFailed,
   });
 
   @override
@@ -227,8 +270,9 @@ class _NativeAdViewState extends State<_NativeAdView>
   @override
   void onAdLoadFailed(dynamic nativeAd, dynamic error) {
     debugPrint('LevelPlay native failed: $error');
+    widget.onFailed?.call();
   }
 
   @override
-  void onAdLoaded(dynamic nativeAd, dynamic adInfo) {}
+  void onAdLoaded(dynamic nativeAd, dynamic adInfo) => widget.onLoaded?.call();
 }

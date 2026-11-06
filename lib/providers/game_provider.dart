@@ -59,6 +59,18 @@ class GameProvider extends ChangeNotifier {
   /// (the "AI Move" button — different from the CPU opponent's own move).
   bool _aiMoveRequestedForPlayer = false;
   bool get aiMoveRequestedForPlayer => _aiMoveRequestedForPlayer;
+
+  /// Best-move hint (UCI, e.g. "e2e4") from the hint button. Only valid while
+  /// the position is unchanged; null otherwise.
+  String? _hintUci;
+  String? _hintFen;
+  String? get hintUci => (_hintUci != null && _hintFen == _game.fen) ? _hintUci : null;
+  void clearHint() {
+    if (_hintUci == null) return;
+    _hintUci = null;
+    _hintFen = null;
+    notifyListeners();
+  }
   bool _flipBoard = false;
   bool _stockfishInitialized = false;
   final Logger _logger = Logger();
@@ -1021,14 +1033,14 @@ class GameProvider extends ChangeNotifier {
   void setLocalMultiplayer(bool value) {
     _localMultiplayer = value;
     _isOnlineGame = false; // Cannot be both local and online
-    _vsCPU = false;
+    if (value) _vsCPU = false; // turning local play OFF must not switch the CPU game off
     notifyListeners();
   }
 
   void setIsOnlineGame(bool value) {
     _isOnlineGame = value;
     _localMultiplayer = false; // Cannot be both local and online
-    _vsCPU = false;
+    if (value) _vsCPU = false; // turning online OFF must not switch the CPU game off
     notifyListeners();
   }
 
@@ -1107,6 +1119,14 @@ class GameProvider extends ChangeNotifier {
 
   // Start the timer for the current player
   void _startTimer() {
+    // CPU games are untimed. Keep this guard here so initialization, moves,
+    // rematches, and every other caller cannot accidentally start a clock.
+    if (_vsCPU && !_isOnlineGame) {
+      _stopTimers();
+      _turnStartTime = null;
+      return;
+    }
+
     _stopTimers(); // Stop any existing timers
     _turnStartTime = DateTime.now();
 
@@ -1129,6 +1149,11 @@ class GameProvider extends ChangeNotifier {
       final whitesBase = _whitesTime;
       final whitesStartedAt = DateTime.now();
       _whitesTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        // CPU games are untimed: never let a clock tick (or time out) in one.
+        if (_vsCPU && !_isOnlineGame) {
+          timer.cancel();
+          return;
+        }
         final whitesLeft = whitesBase - DateTime.now().difference(whitesStartedAt);
         if (whitesLeft > Duration.zero) {
           _whitesTime = whitesLeft;
@@ -1166,6 +1191,11 @@ class GameProvider extends ChangeNotifier {
       final blacksBase = _blacksTime;
       final blacksStartedAt = DateTime.now();
       _blacksTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        // CPU games are untimed: never let a clock tick (or time out) in one.
+        if (_vsCPU && !_isOnlineGame) {
+          timer.cancel();
+          return;
+        }
         final blacksLeft = blacksBase - DateTime.now().difference(blacksStartedAt);
         if (blacksLeft > Duration.zero) {
           _blacksTime = blacksLeft;
@@ -1909,7 +1939,9 @@ class GameProvider extends ChangeNotifier {
     try {
       await waitForStockfish();
 
-      _logger.i('AI Move requested: computing best move for the player...');
+      _logger.i('Hint requested: computing best move for the player...');
+      _hintUci = null;
+      _hintFen = null;
       _aiMoveRequestedForPlayer = true;
       notifyListeners();
 
@@ -1978,51 +2010,12 @@ class GameProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        _logger.i('AI-suggested move for player: $suggestedMove');
-
-        if (_vsCPU) {
-          _fenHistory.add(_game.fen);
-        }
-
-        final fenBeforeAiMove = _game.fen;
-        _game.makeMoveString(suggestedMove);
-        _playMoveSound(fenBeforeAiMove);
-
-        if (_game.history.isNotEmpty) {
-          _moveHistory.add(suggestedMove);
-        }
-
+        _logger.i('AI hint for player: $suggestedMove');
+        // Hint only: remember the move (shown as an arrow on the board while
+        // the position stays the same). The player makes the move themselves.
+        _hintUci = suggestedMove;
+        _hintFen = _game.fen;
         _aiMoveRequestedForPlayer = false;
-        _state = _game.squaresState(_player);
-        updateCapturedPieces();
-
-        if (_timePerMove == null &&
-            _bonusTime != null &&
-            _bonusThreshold != null &&
-            _turnStartTime != null) {
-          final moveDuration = DateTime.now().difference(_turnStartTime!);
-          if (moveDuration <= _bonusThreshold!) {
-            if (_game.state.turn == Squares.white) {
-              _blacksTime += _bonusTime!;
-            } else {
-              _whitesTime += _bonusTime!;
-            }
-          }
-        } else if (_incrementalValue > 0) {
-          if (_game.state.turn == Squares.white) {
-            _blacksTime += Duration(seconds: _incrementalValue);
-          } else {
-            _whitesTime += Duration(seconds: _incrementalValue);
-          }
-        }
-
-        checkGameOver(userId: 'cpu_game_user');
-        if (!_game.gameOver) {
-          _startTimer();
-          // Now let the actual CPU opponent respond, same as after any
-          // normal human move (mirrors _onMove in game_screen.dart).
-          makeStockfishMove();
-        }
         notifyListeners();
         return;
       }

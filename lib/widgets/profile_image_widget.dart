@@ -62,15 +62,19 @@ class ProfileImageWidget extends StatelessWidget {
     } else if (selectedAvatar != null) {
       profileImage = CircleAvatar(
         radius: radius,
-        backgroundImage: AssetImage(selectedAvatar!),
+        foregroundImage: AssetImage(selectedAvatar!),
+        onForegroundImageError: (_, _) {},
         backgroundColor: backgroundColor ?? Colors.grey[300],
+        child: Icon(Icons.person, size: radius),
       );
     } else if (imageUrl != null && imageUrl!.isNotEmpty) {
       if (imageUrl!.startsWith('assets')) {
         profileImage = CircleAvatar(
           radius: radius,
-          backgroundImage: AssetImage(imageUrl!),
+          foregroundImage: AssetImage(imageUrl!),
+          onForegroundImageError: (_, _) {},
           backgroundColor: backgroundColor ?? Colors.grey[300],
+          child: Icon(Icons.person, size: radius),
         );
       } else {
         // Network image
@@ -88,16 +92,20 @@ class ProfileImageWidget extends StatelessWidget {
           ),
           errorWidget: (context, url, error) => CircleAvatar(
             radius: radius,
-            backgroundImage: AssetImage(AssetsManager.userIcon),
+            foregroundImage: AssetImage(AssetsManager.userIcon),
+            onForegroundImageError: (_, _) {},
             backgroundColor: backgroundColor ?? Colors.grey[300],
+            child: Icon(Icons.person, size: radius),
           ),
         );
       }
     } else {
       profileImage = CircleAvatar(
         radius: radius,
-        backgroundImage: AssetImage(AssetsManager.userIcon),
+        foregroundImage: AssetImage(AssetsManager.userIcon),
+        onForegroundImageError: (_, _) {},
         backgroundColor: backgroundColor ?? Colors.grey[300],
+        child: Icon(Icons.person, size: radius),
       );
     }
 

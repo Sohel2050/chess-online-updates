@@ -67,7 +67,7 @@ class _CommunityPollScreenState extends State<CommunityPollScreen> {
     }
 
     if (pollProvider.activePoll == null) {
-      return const Center(
+      return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -78,7 +78,7 @@ class _CommunityPollScreenState extends State<CommunityPollScreen> {
               style: TextStyle(fontSize: 18),
             ),
             SizedBox(height: 8),
-            Text('Check back later!', style: TextStyle(color: Colors.grey)),
+            Text('Check back later!', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
           ],
         ),
       );
@@ -248,7 +248,7 @@ class _CommunityPollScreenState extends State<CommunityPollScreen> {
                   const SizedBox(height: 8),
                   Text(
                     '$totalVotes ${totalVotes == 1 ? 'vote' : 'votes'}',
-                    style: const TextStyle(color: Colors.grey, fontSize: 14),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14),
                   ),
                 ],
               ),
@@ -353,7 +353,7 @@ class _CommunityPollScreenState extends State<CommunityPollScreen> {
                 const SizedBox(height: 8),
                 Text(
                   '${animatedPercentage.toStringAsFixed(1)}% ($votes ${votes == 1 ? 'vote' : 'votes'})',
-                  style: const TextStyle(fontSize: 14, color: Colors.grey),
+                  style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
                 ),
               ],
             ),

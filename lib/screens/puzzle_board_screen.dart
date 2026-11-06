@@ -18,6 +18,7 @@ import '../services/personal_puzzle_service.dart';
 import '../utils/puzzle_error_handler.dart';
 import '../widgets/puzzle_completion_dialog.dart';
 import '../widgets/puzzle_loading_widget.dart';
+import '../widgets/move_arrow_overlay.dart';
 
 class PuzzleBoardScreen extends StatefulWidget {
   final PuzzleModel puzzle;
@@ -51,6 +52,12 @@ class PuzzleBoardScreen extends StatefulWidget {
 
 class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
   late PuzzleMovePattern _movePattern;
+
+  /// The puzzle with its solution normalised to UCI ("d1h5"). Puzzles from
+  /// the server / bundled data may list moves in SAN ("Qh5"); everything
+  /// below (hint arrow, opponent replies, validation, Show Solution, and the
+  /// provider) works only with this UCI version.
+  late PuzzleModel _puzzle;
   late bishop.Game _game;
   late SquaresState _state;
   late PuzzleProvider _puzzleProvider;
@@ -59,7 +66,21 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
   bool _hasError = false;
   String? _errorMessage;
   bool _showVisualHint = false;
+  String? _hintUci; // best-move hint shown as an arrow until the next move
+  bool _isPlayingSolution = false;
   bool _ratedReported = false; // rated mode: the result of this puzzle is already sent
+
+  /// How many solution plies are currently on the board (opponent's and the
+  /// player's correct moves alike). This is the single source of truth for
+  /// hint, opponent replies and board restore, so they can never disagree
+  /// about the position. (The provider's `currentMoveIndex` only counts the
+  /// PLAYER's moves, so it must not be used as a ply index.)
+  int _pliesPlayed = 0;
+
+  /// Bumped on every reset / solution playback / re-init. Delayed callbacks
+  /// (opponent reply, completion dialog, solution animation) remember the
+  /// value they were scheduled with and do nothing if it has changed.
+  int _runId = 0;
   List<int> _highlightedSquares = [];
 
   @override
@@ -81,6 +102,12 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         throw Exception('Puzzle has no solution moves');
       }
 
+      final normalized = _normalizeSolution(widget.puzzle);
+      if (normalized == null) {
+        throw Exception('Puzzle solution does not fit its position');
+      }
+      _puzzle = widget.puzzle.copyWith(solution: normalized);
+
       // Create game from FEN position with error handling
       try {
         _game = bishop.Game(
@@ -96,6 +123,11 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         throw Exception('Puzzle position is already game over');
       }
 
+      _pliesPlayed = 0;
+      _runId++;
+      _isPlayingSolution = false;
+      _hintUci = null;
+
       // Analyze the puzzle solution to determine move pattern
       final movePattern = _analyzePuzzlePattern();
       _movePattern = movePattern;
@@ -110,7 +142,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
 
       // Start the puzzle session with error handling
       try {
-        await _puzzleProvider.startPuzzle(widget.puzzle);
+        await _puzzleProvider.startPuzzle(_puzzle);
       } catch (e) {
         throw Exception('Failed to start puzzle session: $e');
       }
@@ -124,11 +156,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
 
       // Play opponent moves automatically if needed
       if (movePattern.opponentMovesFirst) {
-        Future.delayed(const Duration(milliseconds: 1500), () {
-          if (mounted) {
-            _makeOpponentFirstMove();
-          }
-        });
+        _scheduleOpponentMove(const Duration(milliseconds: 1500));
       }
     } catch (e) {
       setState(() {
@@ -148,7 +176,10 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
   }
 
   void _onMove(Move move) async {
-    if (!_isInitialized || _hasError) return;
+    if (!_isInitialized || _hasError || _isPlayingSolution) return;
+    // Not the player's turn (opponent reply pending, or puzzle finished):
+    // ignore silently instead of calling it a wrong move.
+    if (!_isUserTurn) return;
 
     // Log the square click for debugging
     debugPrint('Square clicked: ${move.algebraic()}');
@@ -167,26 +198,44 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
       // Set the board state from the player's perspective
       _state = _game.squaresState(_movePattern.playerColor);
 
-      // Convert move to UCI notation to match puzzle solution format
-      final moveString = move.algebraic();
+      // Puzzle solutions are stored in UCI (e.g. e2e4), while
+      // Move.algebraic() returns SAN (e.g. e4). Compare resulting positions
+      // to identify the exact expected UCI move without mixing notations.
+      final expectedUci = _nextUserMoveUci(fen: fenBeforeUserMove);
+      var matchedExpectedMove = false;
+      if (expectedUci != null) {
+        try {
+          final expectedGame = bishop.Game(
+            variant: bishop.Variant.standard(),
+            fen: fenBeforeUserMove,
+          );
+          matchedExpectedMove = expectedGame.makeMoveString(expectedUci) &&
+              expectedGame.fen == _game.fen;
+        } catch (e) {
+          debugPrint('Could not validate expected puzzle move $expectedUci: $e');
+        }
+      }
 
-      // Check if this puzzle has an opponent first move (multi-move with player as opposite color)
-      final hasOpponentFirstMove = widget.puzzle.solution.length > 1;
       debugPrint(
-        'User move: $moveString, hasOpponentFirstMove: $hasOpponentFirstMove',
+        'User move SAN: ${move.algebraic()}, expected UCI: $expectedUci, '
+            'matched: $matchedExpectedMove',
       );
-      final isValidMove = await _puzzleProvider.makeMove(
-        moveString,
+      final isValidMove = expectedUci != null && matchedExpectedMove
+          ? await _puzzleProvider.makeMove(
+        expectedUci,
         isUserMove: _movePattern.isUserMove,
         expectedUserMoves: _movePattern.expectedUserMoves,
-      );
+      )
+          : false;
 
       if (isValidMove) {
+        _pliesPlayed++; // the player's correct move is now on the board
         // Clear any visual hints when a correct move is made
         if (!mounted) return;
         setState(() {
           _showVisualHint = false;
           _highlightedSquares = [];
+          _hintUci = null;
         });
 
         // Clear the incorrect move flag
@@ -196,18 +245,15 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         final session = _puzzleProvider.currentSession;
         if (session != null && session.isCompleted) {
           // Add a small delay before showing completion dialog
+          final run = _runId;
           Future.delayed(const Duration(milliseconds: 800), () {
-            if (mounted) {
+            if (mounted && run == _runId) {
               _showPuzzleCompletedDialog();
             }
           });
         } else {
           // Make the opponent's response move after a delay to make it visible
-          Future.delayed(const Duration(milliseconds: 1500), () {
-            if (mounted) {
-              _makeOpponentMove();
-            }
-          });
+          _scheduleOpponentMove(const Duration(milliseconds: 1500));
         }
       } else {
         // Invalid move - reset the board state
@@ -233,223 +279,208 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     }
   }
 
-  void _showVisualHintForNextMove() {
-    final session = _puzzleProvider.currentSession;
-    if (session == null) return;
+  // ---- Solution normalisation (SAN / UCI -> UCI) ----------------------------
 
-    // Find the next user move in the solution based on the move pattern
-    String? nextMoveSource;
-    final solution = session.puzzle.solution;
-    final isUserMove = _movePattern.isUserMove;
+  static final RegExp _uciRe = RegExp(r'^[a-h][1-8][a-h][1-8][qrbn]?$');
 
-    log(
-      'Show visual hint for next move: $isUserMove- ${session.userMoves.length} user moves played, ${isUserMove.length} user moves found',
-    );
+  /// Piece letters of a FEN board as a 64-entry list, index = rank*8+file
+  /// with rank 0 = rank 1 (white's back rank).
+  List<String> _fenBoard(String fen) {
+    final cells = List<String>.filled(64, '');
+    final rows = fen.split(' ').first.split('/');
+    for (int r = 0; r < 8 && r < rows.length; r++) {
+      int file = 0;
+      for (final ch in rows[r].split('')) {
+        final n = int.tryParse(ch);
+        if (n != null) {
+          file += n;
+        } else {
+          cells[(7 - r) * 8 + file] = ch;
+          file++;
+        }
+      }
+    }
+    return cells;
+  }
 
-    // Find the next user move after the current user moves
-    int userMovesPlayed = session.userMoves.length;
-    int userMovesFound = 0;
+  String _sqName(int i) =>
+      '${String.fromCharCode(97 + i % 8)}${(i ~/ 8) + 1}';
 
-    for (int i = 0; i < solution.length && i < isUserMove.length; i++) {
-      if (isUserMove[i]) {
-        if (userMovesFound == userMovesPlayed) {
-          // This is the next user move
-          final move = solution[i];
-          if (move.length >= 2) {
-            nextMoveSource = move.substring(0, 2);
+  /// The UCI move that turns [before] into [after] (both FEN), found by
+  /// comparing the two boards. Works for captures, castling, en passant and
+  /// promotion without relying on any move-object API.
+  String? _uciFromFens(String before, String after) {
+    final a = _fenBoard(before);
+    final b = _fenBoard(after);
+    final whiteMoved = before.split(' ')[1] == 'w';
+    bool mine(String c) =>
+        c.isNotEmpty && (c == c.toUpperCase()) == whiteMoved;
+    final emptied = <int>[];
+    final filled = <int>[];
+    for (int i = 0; i < 64; i++) {
+      if (a[i] == b[i]) continue;
+      if (mine(a[i]) && !mine(b[i])) emptied.add(i);
+      if (mine(b[i])) filled.add(i);
+    }
+    if (emptied.isEmpty || filled.isEmpty) return null;
+    int from = emptied.first;
+    int to = filled.first;
+    if (emptied.length > 1 || filled.length > 1) {
+      // Castling: the king's squares are the move.
+      final kingChar = whiteMoved ? 'K' : 'k';
+      final kf = emptied.where((i) => a[i] == kingChar).toList();
+      final kt = filled.where((i) => b[i] == kingChar).toList();
+      if (kf.isEmpty || kt.isEmpty) return null;
+      from = kf.first;
+      to = kt.first;
+    }
+    var uci = _sqName(from) + _sqName(to);
+    if (a[from].toLowerCase() == 'p' && b[to].toLowerCase() != 'p') {
+      uci += b[to].toLowerCase(); // promotion piece
+    }
+    return uci;
+  }
+
+  /// Returns the solution as UCI, or null if a move is not legal in turn.
+  List<String>? _normalizeSolution(PuzzleModel puzzle) {
+    try {
+      final g = bishop.Game(variant: bishop.Variant.standard(), fen: puzzle.fen);
+      final out = <String>[];
+      for (final raw in puzzle.solution) {
+        final token = raw.trim();
+        final before = g.fen;
+        if (_uciRe.hasMatch(token.toLowerCase())) {
+          if (!g.makeMoveString(token.toLowerCase())) return null;
+          out.add(token.toLowerCase());
+          continue;
+        }
+        final san = token.replaceAll(RegExp(r'[+#!?]'), '');
+        bool done = false;
+        for (final m in g.generateLegalMoves()) {
+          String moveSan;
+          try {
+            moveSan = g.toSan(m).replaceAll(RegExp(r'[+#!?]'), '');
+          } catch (_) {
+            continue;
+          }
+          if (moveSan == san) {
+            g.makeMove(m);
+            done = true;
             break;
           }
         }
-        userMovesFound++;
+        if (!done) return null;
+        final uci = _uciFromFens(before, g.fen);
+        if (uci == null) return null;
+        out.add(uci);
       }
-    }
-
-    if (nextMoveSource != null && nextMoveSource.length == 2) {
-      // Convert algebraic notation to square index
-      final file = nextMoveSource.codeUnitAt(0) - 'a'.codeUnitAt(0);
-      final rank = 8 - (nextMoveSource.codeUnitAt(1) - '0'.codeUnitAt(0));
-
-      log('Next move source: $nextMoveSource, file: $file, rank: $rank');
-
-      if (file >= 0 && file < 8 && rank >= 0 && rank < 8) {
-        final squareIndex = rank * 8 + file;
-
-        setState(() {
-          _showVisualHint = true;
-          _highlightedSquares = [squareIndex];
-        });
-
-        log('Showing visual hint for next move: $squareIndex');
-
-        // Automatically hide the hint after a few seconds
-        Future.delayed(const Duration(seconds: 3), () {
-          if (mounted) {
-            setState(() {
-              _showVisualHint = false;
-              _highlightedSquares = [];
-            });
-          }
-        });
-      }
+      return out;
+    } catch (e) {
+      debugPrint('Could not normalise solution of ${puzzle.id}: $e');
+      return null;
     }
   }
 
-  void _makeOpponentFirstMove() {
-    // This method handles cases where the opponent needs to play the first move
-    // to set up the puzzle position (like in puzzle 001KR where Black plays Kg8 first)
+  /// True when the next solution ply is one the PLAYER has to play.
+  bool get _isUserTurn {
+    final solution = _puzzle.solution;
+    final isUserMove = _movePattern.isUserMove;
+    return _pliesPlayed < solution.length &&
+        _pliesPlayed < isUserMove.length &&
+        isUserMove[_pliesPlayed];
+  }
 
-    final session = _puzzleProvider.currentSession;
-    if (session == null) return;
+  /// The next move the player has to find (UCI, e.g. "e2e4"), or null when
+  /// it is not the player's turn / the puzzle is over. The move is also
+  /// checked against the CURRENT board, so a hint can never point at a move
+  /// that is illegal in the position the player is looking at.
+  String? _nextUserMoveUci({String? fen}) {
+    if (!_isUserTurn) return null;
+    final candidate = _puzzle.solution[_pliesPlayed].trim().toLowerCase();
+    if (!RegExp(r'^[a-h][1-8][a-h][1-8][qrbn]?$').hasMatch(candidate)) {
+      return null;
+    }
+    try {
+      // Dry run on a copy: the real game must not be touched by a hint.
+      // [fen] = the position the move is to be played from. After the player
+      // has already moved on the board it must be the position BEFORE that
+      // move, otherwise the correct move looks illegal.
+      final probe = bishop.Game(
+        variant: bishop.Variant.standard(),
+        fen: fen ?? _game.fen,
+      );
+      return probe.makeMoveString(candidate) ? candidate : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
-    final solution = session.puzzle.solution;
-    if (solution.isEmpty) return;
+  void _scheduleOpponentMove(Duration delay) {
+    final run = _runId;
+    Future.delayed(delay, () {
+      if (mounted && run == _runId && !_isPlayingSolution) {
+        _makeOpponentMove();
+      }
+    });
+  }
 
-    final firstSolutionMove = solution.first;
-    debugPrint('Making opponent first move: $firstSolutionMove');
+  /// Plays the opponent's next solution ply (the very first one in
+  /// "opponent plays first" puzzles, or the reply after a correct move).
+  void _makeOpponentMove() {
+    final solution = _puzzle.solution;
+    final isUserMove = _movePattern.isUserMove;
+    if (_pliesPlayed >= solution.length ||
+        _pliesPlayed >= isUserMove.length ||
+        isUserMove[_pliesPlayed]) {
+      return; // nothing for the opponent to play right now
+    }
+
+    final opponentMove = solution[_pliesPlayed];
+    debugPrint('Making opponent move #$_pliesPlayed: $opponentMove');
 
     try {
-      // Make the first move from the solution as the opponent's move
-      final success = _game.makeMoveString(firstSolutionMove);
+      final fenBefore = _game.fen;
+      if (!_game.makeMoveString(opponentMove)) {
+        debugPrint('Failed to make opponent move: $opponentMove');
+        return;
+      }
+      _pliesPlayed++;
+      SoundService.instance.playMove(fenBefore, _game.fen);
+      _state = _game.squaresState(_movePattern.playerColor);
+      if (mounted) setState(() {});
 
-      if (success) {
-        // Update the squares state for the new position
-        // After opponent's move, set the board state from the player's perspective
-        _state = _game.squaresState(_movePattern.playerColor);
-
-        setState(() {});
-
-        // // Show a brief message about the opponent's move
-        // ScaffoldMessenger.of(context).showSnackBar(
-        //   SnackBar(
-        //     content: Text(
-        //       'Opponent played: ${_formatMoveForDisplay(firstSolutionMove)}',
-        //     ),
-        //     backgroundColor: Colors.blue,
-        //     duration: const Duration(seconds: 2),
-        //   ),
-        // );
-      } else {
-        debugPrint('Failed to make opponent first move: $firstSolutionMove');
+      final session = _puzzleProvider.currentSession;
+      if (session != null && session.isCompleted) {
+        final run = _runId;
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted && run == _runId) _showPuzzleCompletedDialog();
+        });
       }
     } catch (e) {
-      debugPrint('Could not make opponent first move: $e');
-      // If we can't make the move, just continue with the puzzle as is
+      debugPrint('Error making opponent move: $e');
     }
   }
 
-  void _makeOpponentMove() {
-    final session = _puzzleProvider.currentSession;
-    if (session == null) return;
-
-    final solution = session.puzzle.solution;
-    final userMoves = session.userMoves;
-
-    // Use the move pattern to find the next opponent move
-    int nextOpponentMoveIndex = -1;
-    int userMovesSeen = 0;
-
-    // Find the next opponent move after the current user moves
-    for (int i = 0; i < _movePattern.isUserMove.length; i++) {
-      if (_movePattern.isUserMove[i]) {
-        userMovesSeen++;
-        if (userMovesSeen > userMoves.length) {
-          // We've found all user moves, now look for the next opponent move
-          break;
-        }
-      } else {
-        // This is an opponent move
-        if (userMovesSeen == userMoves.length) {
-          // This is the next opponent move to play
-          nextOpponentMoveIndex = i;
-          break;
-        }
-      }
-    }
-
-    debugPrint(
-      'Looking for opponent move at index $nextOpponentMoveIndex, userMoves: ${userMoves.length}, solution length: ${solution.length}',
-    );
-
-    // Check if there's an opponent response move
-    if (nextOpponentMoveIndex >= 0 && nextOpponentMoveIndex < solution.length) {
-      final opponentMoveString = solution[nextOpponentMoveIndex];
-      debugPrint('Making opponent move: $opponentMoveString');
-
-      // Make the opponent move using UCI notation
-      try {
-        // Parse the UCI move and make it
-        final fenBeforeOpponent = _game.fen;
-        final success = _game.makeMoveString(opponentMoveString);
-
-        if (success) {
-          SoundService.instance.playMove(fenBeforeOpponent, _game.fen);
-          // Update state after opponent move
-          // Set the board state from the player's perspective
-          _state = _game.squaresState(_movePattern.playerColor);
-          setState(() {});
-
-          // // Show a brief message about the opponent's move
-          // ScaffoldMessenger.of(context).showSnackBar(
-          //   SnackBar(
-          //     content: Text(
-          //       'Opponent played: ${_formatMoveForDisplay(opponentMoveString)}',
-          //     ),
-          //     backgroundColor: Colors.blue,
-          //     duration: const Duration(seconds: 2),
-          //   ),
-          // );
-
-          // Check if puzzle is completed after opponent's move
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted) {
-              final updatedSession = _puzzleProvider.currentSession;
-              if (updatedSession != null && updatedSession.isCompleted) {
-                _showPuzzleCompletedDialog();
-              }
-            }
-          });
-        } else {
-          debugPrint('Failed to make opponent move: $opponentMoveString');
-        }
-      } catch (e) {
-        // Handle move parsing error
-        debugPrint('Error making opponent move: $e');
-      }
-    } else {
-      debugPrint('No more opponent moves in solution');
-    }
-  }
-
-  /// Rebuilds the board position from the puzzle's starting FEN.
+  /// Rebuilds the board from the puzzle's starting FEN and replays the
+  /// solution plies already confirmed (`_pliesPlayed`): the opponent's
+  /// moves and the player's correct moves alike. Used after a wrong move so
+  /// the board snaps back to the position the puzzle is really in (not to
+  /// move 0, and not to a position missing the opponent's reply).
   ///
-  /// By default (`fromScratch: false`), it replays every solution move
-  /// already confirmed correct so far (opponent's auto-played moves and
-  /// the player's own correct moves alike), instead of always snapping
-  /// back to move 0.
-  ///
-  /// This fixes a bug where, in a multi-move puzzle, getting a LATER move
-  /// wrong would reset the visible board all the way to the start while
-  /// `_puzzleProvider`'s session (`currentMoveIndex`, `userMoves`) stayed
-  /// at wherever the player had correctly progressed to — the board and
-  /// the provider disagreed about the position, so nothing the player did
-  /// next matched what the provider expected, effectively locking the
-  /// puzzle. Replaying up to the session's actual progress keeps both in
-  /// sync.
-  ///
-  /// Pass `fromScratch: true` for an intentional full reset regardless of
-  /// progress (e.g. `_playSolution`, which then replays the ENTIRE
-  /// solution from move 0 for the "show solution" animation).
+  /// `fromScratch: true` forgets all progress and goes back to the start
+  /// (reset, and before "Show Solution" replays the whole solution).
   void _resetBoardState({bool fromScratch = false}) {
     _game = bishop.Game(
       variant: bishop.Variant.standard(),
       fen: widget.puzzle.fen,
     );
 
-    if (!fromScratch) {
-      final session = _puzzleProvider.currentSession;
-      final progress = session?.currentMoveIndex ?? 0;
-      final solution = widget.puzzle.solution;
-      for (int i = 0; i < progress && i < solution.length; i++) {
+    if (fromScratch) {
+      _pliesPlayed = 0;
+    } else {
+      // Replay exactly the plies that are confirmed so far.
+      final solution = _puzzle.solution;
+      for (int i = 0; i < _pliesPlayed && i < solution.length; i++) {
         _game.makeMoveString(solution[i]);
       }
     }
@@ -508,11 +539,11 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         final ratedStreak = context.read<StreakProvider>();
         RatedPuzzleService()
             .submitResult(
-              widget.ratedAttemptId!,
-              solved: true,
-              moves: List<String>.from(session.userMoves),
-              dateKey: PuzzleService.localDateKey(),
-            )
+          widget.ratedAttemptId!,
+          solved: true,
+          moves: List<String>.from(session.userMoves),
+          dateKey: PuzzleService.localDateKey(),
+        )
             .then((r) {
           if (r != null) _showRatingChange(r);
           ratedStreak.refresh();
@@ -535,10 +566,10 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     }
     if (!_isRated && !_isPersonal) PuzzleService()
         .solvePuzzle(
-          widget.puzzle.id,
-          List<String>.from(session.userMoves),
-          widget.dailyDateKey ?? PuzzleService.localDateKey(),
-        )
+      widget.puzzle.id,
+      List<String>.from(session.userMoves),
+      widget.dailyDateKey ?? PuzzleService.localDateKey(),
+    )
         .then((_) {
       streakProvider.refresh();
       missionProvider.refresh();
@@ -565,23 +596,32 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
         await _nextPuzzle();
         break;
       case null:
-        // Dialog was dismissed without action
+      // Dialog was dismissed without action
         break;
     }
   }
 
   void _resetPuzzle() {
+    // Cancels every pending delayed callback and any running solution playback.
+    _runId++;
+    _isPlayingSolution = false;
+
     // Check if we have an active session before trying to reset
     if (_puzzleProvider.currentSession == null) {
       // If no session, reinitialize the puzzle
       _initializePuzzle();
     } else {
       _puzzleProvider.resetPuzzle();
-      _resetBoardState();
+      _resetBoardState(fromScratch: true);
       setState(() {
         _showVisualHint = false;
         _highlightedSquares = [];
+        _hintUci = null;
       });
+      // "Opponent plays first" puzzles must replay that first move again.
+      if (_movePattern.opponentMovesFirst) {
+        _scheduleOpponentMove(const Duration(milliseconds: 800));
+      }
     }
   }
 
@@ -668,63 +708,152 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     }
   }
 
+  /// Shows the next correct move as an arrow. It never plays the move.
   Future<void> _requestHint() async {
-    // Instead of showing the hint bottom sheet, we'll show a visual hint
-    // But first, we need to get the hint from the provider
-    final hint = await _puzzleProvider.requestHint();
-    if (hint != null) {
-      log('showing hint: $hint');
-      // Show the visual hint
-      _showVisualHintForNextMove();
-    }
-  }
+    if (!_isInitialized || _hasError || _isPlayingSolution) return;
 
-  void _playSolution() {
-    // Full reset to move 0 — this is about to replay the ENTIRE solution
-    // from the start, not just resume wherever the player had progressed to.
-    _resetBoardState(fromScratch: true);
-
-    // Clear the incorrect move flag
-    _puzzleProvider.clearIncorrectMoveFlag();
-
-    // Play through the solution with delays
-    _playSolutionMoves(0);
-  }
-
-  void _playSolutionMoves(int moveIndex) {
     final session = _puzzleProvider.currentSession;
-    if (session == null) return;
+    if (session == null || session.state != PuzzleSessionState.active) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This puzzle is already finished.')),
+      );
+      return;
+    }
 
-    final solution = session.puzzle.solution;
+    // Opponent's reply still on its way: the board is not ready yet.
+    if (!_isUserTurn) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wait for the opponent\'s move first.')),
+      );
+      return;
+    }
 
+    final move = _nextUserMoveUci();
+    if (move == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No next move is available for a hint.')),
+      );
+      return;
+    }
+
+    // Same arrow already showing: nothing new to reveal, don't count again.
+    if (_hintUci == move) return;
+
+    setState(() {
+      _hintUci = move;
+      _showVisualHint = false;
+      _highlightedSquares = [];
+    });
+
+    // Record/use a textual hint if available, but never let that prevent the
+    // visual move arrow from appearing.
+    await _puzzleProvider.requestHint();
+  }
+
+  /// Show Solution: restart from the original position and play the whole
+  /// solution move by move. Not counted as solved.
+  void _playSolution() {
+    if (!_isInitialized || _hasError || _isPlayingSolution) return;
+    if (_puzzle.solution.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Puzzle solution is not available.')),
+      );
+      return;
+    }
+
+    // Rated mode: looking at the solution counts as a failed attempt,
+    // otherwise "show solution -> retry -> solve" would farm rating.
+    _reportRatedFailure();
+
+    final run = ++_runId; // cancels pending opponent replies / dialogs
+    setState(() {
+      _hintUci = null;
+      _showVisualHint = false;
+      _highlightedSquares = [];
+      _isPlayingSolution = true;
+    });
+
+    // Rebuild from the original FEN, then visibly play every solution move.
+    _resetBoardState(fromScratch: true);
+    _puzzleProvider.clearIncorrectMoveFlag();
+    setState(() {});
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted && run == _runId) _playSolutionMoves(0, run);
+    });
+  }
+
+  void _playSolutionMoves(int moveIndex, int run) {
+    if (!mounted || run != _runId || !_isPlayingSolution) return;
+
+    final solution = _puzzle.solution;
     if (moveIndex >= solution.length) {
-      // Solution playback complete
+      _onSolutionFinished(run);
       return;
     }
 
     final moveString = solution[moveIndex];
-
     try {
-      // Make the move
-      final fenBeforeSolutionMove = _game.fen;
-      final success = _game.makeMoveString(moveString);
-
-      if (success) {
-        SoundService.instance.playMove(fenBeforeSolutionMove, _game.fen);
-        // Update the board state
+      final fenBefore = _game.fen;
+      if (_game.makeMoveString(moveString)) {
+        SoundService.instance.playMove(fenBefore, _game.fen);
         _state = _game.squaresState(_movePattern.playerColor);
-
         setState(() {});
-
-        // Schedule the next move after a delay
-        Future.delayed(const Duration(milliseconds: 1000), () {
-          if (mounted) {
-            _playSolutionMoves(moveIndex + 1);
-          }
+        Future.delayed(const Duration(milliseconds: 900), () {
+          _playSolutionMoves(moveIndex + 1, run);
         });
+      } else {
+        debugPrint('Solution playback stopped: illegal move $moveString at index $moveIndex');
+        setState(() => _isPlayingSolution = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not play solution move: $moveString')),
+        );
       }
     } catch (e) {
-      debugPrint('Error playing solution move: $e');
+      debugPrint('Error playing solution move $moveString: $e');
+      setState(() => _isPlayingSolution = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('An error occurred while showing the solution.')),
+      );
+    }
+  }
+
+  /// After the solution has auto-played, finish the puzzle: offer retry / next.
+  /// (The puzzle is NOT counted as solved when the solution was shown.)
+  Future<void> _onSolutionFinished(int run) async {
+    if (mounted) setState(() => _isPlayingSolution = false);
+    await Future.delayed(const Duration(milliseconds: 700));
+    if (!mounted || run != _runId) return;
+    final hasNext = _isRated
+        ? true
+        : (_isPersonal ? false : await _hasNextPuzzle());
+    if (!mounted || run != _runId) return;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Puzzle complete'),
+        content: const Text(
+          'The solution was played. It is not counted as solved.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'retry'),
+            child: const Text('Try again'),
+          ),
+          if (hasNext)
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, 'next'),
+              child: const Text('Next puzzle'),
+            ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'next') {
+      await _nextPuzzle();
+    } else {
+      // "Try again" or dialog dismissed: never leave the board parked on the
+      // final position while the session thinks nothing was played.
+      _resetPuzzle();
     }
   }
 
@@ -771,67 +900,13 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
             backgroundColor: Theme.of(context).colorScheme.surface,
             elevation: 0,
             actions: [
-              Consumer<PuzzleProvider>(
-                builder: (context, puzzleProvider, child) {
-                  final session = puzzleProvider.currentSession;
-                  final hasMoreHints = session?.hasMoreHints ?? false;
-                  final hintsUsed = session?.hintsUsed ?? 0;
-                  final totalHints = widget.puzzle.effectiveHintCount;
-
-                  return Stack(
-                    children: [
-                      IconButton(
-                        onPressed: hasMoreHints ? _requestHint : null,
-                        icon: Icon(
-                          Icons.lightbulb,
-                          color: hasMoreHints
-                              ? (hintsUsed > 0 ? Colors.amber : null)
-                              : Colors.grey,
-                        ),
-                        tooltip: hasMoreHints
-                            ? 'Get Hint ($hintsUsed/$totalHints used)'
-                            : 'No more hints available',
-                      ),
-                      if (hintsUsed > 0)
-                        Positioned(
-                          right: 8,
-                          top: 8,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              color: Colors.amber,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            constraints: const BoxConstraints(
-                              minWidth: 16,
-                              minHeight: 16,
-                            ),
-                            child: Text(
-                              '$hintsUsed',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ),
-                    ],
-                  );
-                },
-              ),
-              // IconButton(
-              //   onPressed: () {
-              //     setState(() {
-              //       _flipBoard = !_flipBoard;
-              //     });
-              //   },
-              //   icon: const Icon(Icons.flip),
-              //   tooltip: 'Flip Board',
-              // ),
               IconButton(
-                onPressed: _resetPuzzle,
+                onPressed: _isPlayingSolution ? null : _requestHint,
+                icon: const Icon(Icons.lightbulb_outline_rounded),
+                tooltip: 'Show best-move arrow',
+              ),
+              IconButton(
+                onPressed: _isPlayingSolution ? null : _resetPuzzle,
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Reset Puzzle',
               ),
@@ -840,141 +915,9 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
           body: SafeArea(
             child: Column(
               children: [
-                // Puzzle info section
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.surfaceContainerHighest,
-                    borderRadius: const BorderRadius.vertical(
-                      bottom: Radius.circular(16),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Objective
-                      Text(
-                        widget.puzzle.objective,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 8),
+                _buildPuzzleHeader(context),
 
-                      // Puzzle metadata
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(
-                              widget.puzzle.difficulty.displayName,
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.onPrimary,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Text(
-                            'Rating: ${widget.puzzle.rating}',
-                            style: Theme.of(context).textTheme.bodyMedium
-                                ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
-                          ),
-                          const Spacer(),
-                          Consumer<PuzzleProvider>(
-                            builder: (context, puzzleProvider, child) {
-                              final session = puzzleProvider.currentSession;
-                              final hintsUsed = session?.hintsUsed ?? 0;
-                              final totalHints = widget.puzzle.effectiveHintCount;
-                              final hasUsedHints = hintsUsed > 0;
-                              final hasMoreHints = hintsUsed < totalHints;
-
-                              return Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: hasUsedHints
-                                      ? Colors.amber.withValues(alpha: 0.2)
-                                      : Theme.of(
-                                          context,
-                                        ).colorScheme.surfaceContainerHigh,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: hasUsedHints
-                                      ? Border.all(
-                                          color: Colors.amber.withValues(
-                                            alpha: 0.5,
-                                          ),
-                                          width: 1,
-                                        )
-                                      : null,
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.lightbulb,
-                                      size: 16,
-                                      color: hasUsedHints
-                                          ? Colors.amber[700]
-                                          : Theme.of(
-                                              context,
-                                            ).colorScheme.onSurfaceVariant,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '$hintsUsed/$totalHints',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: hasUsedHints
-                                                ? Colors.amber[700]
-                                                : Theme.of(context)
-                                                      .colorScheme
-                                                      .onSurfaceVariant,
-                                            fontWeight: hasUsedHints
-                                                ? FontWeight.bold
-                                                : FontWeight.normal,
-                                          ),
-                                    ),
-                                    if (!hasMoreHints && totalHints > 0) ...[
-                                      const SizedBox(width: 4),
-                                      Icon(
-                                        Icons.check_circle,
-                                        size: 14,
-                                        color: Colors.amber[700],
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
 
                 // Chess board
                 Expanded(
@@ -1007,10 +950,23 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                             ),
                             promotionBehaviour: PromotionBehaviour.autoPremove,
                           ),
+                          // Best-move hint arrow
+                          if (_hintUci != null)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(
+                                  painter: MoveArrowPainter(
+                                    uci: _hintUci,
+                                    flipped: _flipBoard,
+                                    color: const Color(0xCCFFB300),
+                                  ),
+                                ),
+                              ),
+                            ),
                           // Overlay for visual hints
                           if (_showVisualHint)
                             ..._highlightedSquares.map(
-                              (square) => _HintOverlay(squareIndex: square),
+                                  (square) => _HintOverlay(squareIndex: square),
                             ),
                         ],
                       ),
@@ -1018,38 +974,34 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                   ),
                 ),
 
-                // Solution button (only shown when an incorrect move was made)
-                Consumer<PuzzleProvider>(
-                  builder: (context, puzzleProvider, child) {
-                    final session = puzzleProvider.currentSession;
-                    final showSolutionButton =
-                        session?.hasIncorrectMove ?? false;
-
-                    if (showSolutionButton) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16.0,
-                          vertical: 8.0,
-                        ),
-                        child: ElevatedButton.icon(
-                          onPressed: _playSolution,
-                          icon: const Icon(
-                            Icons.play_arrow,
-                            color: Colors.white,
+                // Show Solution: auto-plays the whole solution
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Consumer<PuzzleProvider>(
+                      builder: (context, puzzleProvider, child) {
+                        final wrong =
+                            puzzleProvider.currentSession?.hasIncorrectMove ??
+                                false;
+                        return OutlinedButton.icon(
+                          onPressed: _isPlayingSolution ? null : _playSolution,
+                          icon: const Icon(Icons.play_arrow),
+                          label: Text(_isPlayingSolution ? 'Showing Solution...' : 'Show Solution'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.deepOrange,
+                            side: BorderSide(
+                              color: Colors.deepOrange.withValues(
+                                alpha: wrong ? 1 : 0.5,
+                              ),
+                              width: wrong ? 2 : 1,
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
-                          label: const Text(
-                            'Show Solution',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.deepOrange,
-                            padding: const EdgeInsets.symmetric(vertical: 12.0),
-                          ),
-                        ),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
+                        );
+                      },
+                    ),
+                  ),
                 ),
 
                 // Bottom action buttons
@@ -1064,39 +1016,7 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                           label: const Text('Reset'),
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Consumer<PuzzleProvider>(
-                          builder: (context, puzzleProvider, child) {
-                            final session = puzzleProvider.currentSession;
-                            final hasMoreHints = session?.hasMoreHints ?? false;
-                            final hintsUsed = session?.hintsUsed ?? 0;
-                            final totalHints = widget.puzzle.effectiveHintCount;
 
-                            return ElevatedButton.icon(
-                              onPressed: hasMoreHints ? _requestHint : null,
-                              icon: Icon(
-                                Icons.lightbulb,
-                                color: hasMoreHints
-                                    ? (hintsUsed > 0 ? Colors.amber : null)
-                                    : null,
-                              ),
-                              label: Text(
-                                hasMoreHints
-                                    ? 'Hint ($hintsUsed/$totalHints)'
-                                    : 'No Hints Left',
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: hasMoreHints
-                                    ? (hintsUsed > 0
-                                          ? Colors.amber.withValues(alpha: 0.1)
-                                          : null)
-                                    : null,
-                              ),
-                            );
-                          },
-                        ),
-                      ),
                     ],
                   ),
                 ),
@@ -1108,9 +1028,107 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
     );
   }
 
+  Color _difficultyColor() {
+    switch (widget.puzzle.difficulty.name) {
+      case 'beginner':
+        return const Color(0xFF4CAF50);
+      case 'easy':
+        return const Color(0xFF2196F3);
+      case 'medium':
+        return const Color(0xFFFF9800);
+      case 'hard':
+        return const Color(0xFFE91E63);
+      default:
+        return const Color(0xFF9C27B0);
+    }
+  }
+
+  Widget _buildPuzzleHeader(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final accent = _difficultyColor();
+    final whiteToMove = _movePattern.playerColor == 0;
+
+    Widget chip(IconData icon, String text) => Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: accent),
+          const SizedBox(width: 5),
+          Text(
+            text,
+            style: TextStyle(
+              color: accent,
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: accent.withValues(alpha: 0.5), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 26,
+                height: 26,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: whiteToMove ? Colors.white : Colors.black,
+                  border: Border.all(color: scheme.outline, width: 1.5),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  widget.puzzle.objective,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    height: 1.25,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              chip(Icons.flag_rounded, widget.puzzle.difficulty.displayName),
+              chip(Icons.trending_up_rounded, '${widget.puzzle.rating}'),
+              chip(
+                whiteToMove ? Icons.circle_outlined : Icons.circle,
+                whiteToMove ? 'White to move' : 'Black to move',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Analyze the puzzle solution to determine the move pattern
   PuzzleMovePattern _analyzePuzzlePattern() {
-    final solution = widget.puzzle.solution;
+    final solution = _puzzle.solution;
     final fenTurn = _game.state.turn; // This is a color value
 
     // For single move puzzles, the player plays as the side to move

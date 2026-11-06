@@ -471,10 +471,10 @@ class _OptionsScreenState extends State<OptionsScreen> {
   Widget _buildBoardThemePicker(BuildContext context, SettingsProvider provider) {
     final current = boardStyleById(_boardId);
     return SizedBox(
-      height: 108,
+      height: 124,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         children: [
           for (final st in boardStyles)
             _pickerCard(context,
@@ -495,10 +495,10 @@ class _OptionsScreenState extends State<OptionsScreen> {
           child: Center(child: Text(t, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
         );
     return SizedBox(
-      height: 98,
+      height: 108,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         children: [
           _pickerCard(context,
               selected: _pieceId == 'merida',

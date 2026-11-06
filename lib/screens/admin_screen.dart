@@ -948,9 +948,9 @@ class _AdminScreenState extends State<AdminScreen> {
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
-                    const Text(
+                    Text(
                       'Active game count is now accurate.',
-                      style: TextStyle(color: Colors.grey),
+                      style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
                     ),
                   ],
                 )
@@ -1308,8 +1308,8 @@ class _AdminScreenState extends State<AdminScreen> {
             const SizedBox(height: 8),
             field('1 ad every N game overs', interEvery),
             field('Max per hour', interHour),
-            const Text('0 = no limit',
-                style: TextStyle(fontSize: 12, color: Colors.grey)),
+            Text('0 = no limit',
+                style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
           ],
         ),
       ),
@@ -1620,9 +1620,9 @@ class _AdminScreenState extends State<AdminScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 'Release a new optional version. Users can skip this update.',
-                style: TextStyle(color: Colors.grey),
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
                 maxLines: 2,
               ),
               const SizedBox(height: 20),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/dark_surface.dart';
 import 'package:provider/provider.dart';
 import '../providers/mission_provider.dart';
 import '../providers/streak_provider.dart';
@@ -171,7 +172,7 @@ class _MissionsScreenState extends State<MissionsScreen> {
   Widget build(BuildContext context) {
     final provider = context.watch<MissionProvider>();
     final state = provider.state;
-    return Scaffold(
+    return DarkSurface(child: Scaffold(
       backgroundColor: const Color(0xFF0B0F0D),
       appBar: AppBar(
         backgroundColor: const Color(0xFF0B0F0D),
@@ -221,6 +222,6 @@ class _MissionsScreenState extends State<MissionsScreen> {
           ],
         ),
       ),
-    );
+    ));
   }
 }

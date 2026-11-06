@@ -4,6 +4,7 @@ import 'package:flutter_chess_app/providers/mission_provider.dart';
 import 'dart:async';
 import 'dart:developer';
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/widgets/floating_message_button.dart';
 import 'package:flutter_chess_app/services/game_analyzer.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
@@ -14,7 +15,6 @@ import 'package:flutter_chess_app/services/monetization_service.dart';
 import 'package:flutter_chess_app/services/admin_service.dart';
 import 'package:flutter_chess_app/widgets/monetization_ads_widget.dart'
     show MonetizationAdsWidget, MonetizationAdType;
-import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/services/permission_service.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:flutter_chess_app/services/sound_service.dart';
@@ -1082,8 +1082,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final uci = _pendingMove?.algebraic();
     final showArrow = uci != null && ArrowGeometry.parseUci(uci) != null;
     // Always a Stack, so the board widget keeps its state when an arrow appears or goes away.
+    final hint = gp.hintUci;
+    final showHint = hint != null && ArrowGeometry.parseUci(hint) != null;
     return Stack(children: [
       board,
+      if (showHint)
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: MoveArrowPainter(uci: hint, flipped: gp.flipBoard, color: const Color(0xCC1E88E5)),
+            ),
+          ),
+        ),
       if (showArrow)
         Positioned.fill(
           child: IgnorePointer(
@@ -1342,9 +1352,33 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   ),
                 IconButton(
                   onPressed: gameProvider.flipTheBoard,
-                  icon: const Icon(Icons.rotate_left),
+                  icon: const Icon(Icons.flip_rounded),
                   tooltip: 'Flip Board',
                 ),
+                if (gameProvider.vsCPU)
+                  IconButton(
+                    onPressed: gameProvider.canUndo
+                        ? _showUndoConfirmationDialog
+                        : null,
+                    icon: const Icon(Icons.undo_rounded),
+                    tooltip: gameProvider.canUndo ? 'Undo move' : 'No move to undo',
+                  ),
+                if (gameProvider.vsCPU)
+                  IconButton(
+                    onPressed: (gameProvider.aiThinking || gameProvider.aiMoveRequestedForPlayer)
+                        ? null
+                        : () => gameProvider.requestAiMoveForCurrentPlayer(),
+                    icon: gameProvider.aiMoveRequestedForPlayer
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator.adaptive(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.lightbulb_outline_rounded),
+                    tooltip: gameProvider.aiMoveRequestedForPlayer
+                        ? 'Finding the best move...'
+                        : 'Show best move hint',
+                  ),
                 if (!gameProvider.vsCPU)
                   IconButton(
                     onPressed: _showDrawOfferDialog,
@@ -1753,6 +1787,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (!gameProvider.vsCPU)
                   _buildCircularCountdownTimer(
                     duration: gameProvider.player == Squares.white
                         ? gameProvider.blacksTime
@@ -1892,12 +1927,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Image.asset(
-                              AssetsManager.micIcon,
-                              width: 16,
-                              height: 16,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
+                            _assetIcon(AssetsManager.micIcon, 18, Icons.mic),
                             const SizedBox(width: 4),
                             Text(
                               'In Audio',
@@ -1918,6 +1948,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (!gameProvider.vsCPU)
                   _buildCircularCountdownTimer(
                     duration: opponentColor == Squares.white
                         ? gameProvider.whitesTime
@@ -2081,14 +2112,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                             .withAlpha(77),
                                         borderRadius: BorderRadius.circular(20),
                                       ),
-                                      child: Image.asset(
-                                        AssetsManager.micIcon,
-                                        width: 24,
-                                        height: 24,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
-                                      ),
+                                      child: _assetIcon(AssetsManager.micIcon, 26, Icons.mic),
                                     ),
                                   ),
                                 ],
@@ -2103,6 +2127,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (!gameProvider.vsCPU)
                   _buildCircularCountdownTimer(
                     duration: gameProvider.player == Squares.white
                         ? gameProvider.whitesTime
@@ -2131,76 +2156,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   /// VS Computer-only controls, placed beside the local player's details.
-  Widget _buildVsCpuControls(GameProvider gameProvider) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (gameProvider.aiThinking)
-          Padding(
-            padding: const EdgeInsets.only(right: 10),
-            child: Tooltip(
-              message: 'Computer is thinking',
-              child: Image.asset(
-                AssetsManager.aiThinking,
-                width: 52,
-                height: 52,
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-        Tooltip(
-          message: gameProvider.canUndo ? 'Undo move' : 'No move to undo',
-          child: GestureDetector(
-            onTap: gameProvider.canUndo ? _showUndoConfirmationDialog : null,
-            child: Opacity(
-              opacity: gameProvider.canUndo ? 1 : 0.4,
-              child: Image.asset(
-                AssetsManager.undoButton,
-                width: 52,
-                height: 52,
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Tooltip(
-          message: gameProvider.aiMoveRequestedForPlayer
-              ? 'AI is thinking of a move for you...'
-              : 'Let the AI play the best move for you',
-          child: GestureDetector(
-            onTap: (gameProvider.aiThinking || gameProvider.aiMoveRequestedForPlayer)
-                ? null
-                : () => gameProvider.requestAiMoveForCurrentPlayer(),
-            child: Opacity(
-              opacity: gameProvider.aiThinking ? 0.4 : 1,
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.6),
-                  ),
-                ),
-                child: gameProvider.aiMoveRequestedForPlayer
-                    ? const Padding(
-                        padding: EdgeInsets.all(14),
-                        child: CircularProgressIndicator.adaptive(strokeWidth: 2),
-                      )
-                    : Icon(
-                        Icons.auto_awesome,
-                        color: Theme.of(context).colorScheme.primary,
-                        size: 26,
-                      ),
-              ),
-            ),
-          ),
-        ),
-      ],
+  /// Shows an image asset, falling back to a Material icon if it is missing.
+  Widget _assetIcon(String path, double size, IconData fallback) {
+    return Image.asset(
+      path,
+      width: size,
+      height: size,
+      fit: BoxFit.contain,
+      errorBuilder: (context, error, stack) => Icon(
+        fallback,
+        size: size * 0.6,
+        color: Theme.of(context).colorScheme.primary,
+      ),
     );
+  }
+
+  Widget _buildVsCpuControls(GameProvider gameProvider) {
+    // CPU hint is now available in the AppBar; keep the lower player row clear.
+    return const SizedBox.shrink();
   }
 
   void _toggleMicrophone() async {
@@ -2801,6 +2774,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (!gameProvider.vsCPU)
                   _buildCircularCountdownTimer(
                     duration: gameProvider.player == Squares.white
                         ? gameProvider.blacksTime
@@ -2880,6 +2854,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  if (!gameProvider.vsCPU)
                   _buildCircularCountdownTimer(
                     duration: gameProvider.player == Squares.white
                         ? gameProvider.whitesTime

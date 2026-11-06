@@ -36,6 +36,10 @@ class PlayScreen extends StatefulWidget {
 
 class _PlayScreenState extends State<PlayScreen>
     with AutomaticKeepAliveClientMixin {
+  /// False once the native ad slot is known to be empty (failed / disabled),
+  /// so the layout collapses instead of leaving a blank gap.
+  bool _adSlotVisible = true;
+
   int _selectedGameMode = 0;
   final CarouselSliderController _carouselController =
       CarouselSliderController();
@@ -240,14 +244,17 @@ class _PlayScreenState extends State<PlayScreen>
             final adContainerHeight = isVerySmallScreen
                 ? 92.0
                 : (isSmallScreen ? 108.0 : 190.0);
-            final adSpacing = isVerySmallScreen ? 8.0 : 12.0;
+            final adSpacing = isVerySmallScreen ? 10.0 : 16.0; // gap below ad
+            final adTopGap = isVerySmallScreen ? 10.0 : 16.0; // gap above ad
+            final adBlockHeight = _adSlotVisible
+                ? adContainerHeight + adSpacing + adTopGap
+                : 0.0;
 
             // Reserve space for buttons - ensure it fits
             final baseReservedHeight =
                 onlineCountHeight +
                 carouselHeight +
-                adContainerHeight +
-                adSpacing;
+                adBlockHeight;
 
             // Daily Puzzle card: shown only when the screen has room for it
             // on top of everything else, so small phones never overflow.
@@ -283,7 +290,9 @@ class _PlayScreenState extends State<PlayScreen>
                         minHeight: availableHeight - onlineCountHeight,
                       ),
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        mainAxisAlignment: _adSlotVisible
+                            ? MainAxisAlignment.spaceBetween
+                            : MainAxisAlignment.start,
                         children: [
                           Column(
                             children: [
@@ -446,7 +455,9 @@ class _PlayScreenState extends State<PlayScreen>
                   ),
                 ],
 
-                // Native Ad Container - Responsive height with padding
+                // Native Ad Container - collapses completely when no ad
+                if (_adSlotVisible) ...[
+                SizedBox(height: adTopGap),
                 SizedBox(
                   height: adContainerHeight,
                   child: Padding(
@@ -460,6 +471,11 @@ class _PlayScreenState extends State<PlayScreen>
                       child: MonetizationAdsWidget(
                         user: widget.user,
                         adType: MonetizationAdType.native,
+                        onVisibilityChanged: (visible) {
+                          if (mounted && _adSlotVisible != visible) {
+                            setState(() => _adSlotVisible = visible);
+                          }
+                        },
                       ),
                     ),
                   ),
@@ -467,10 +483,12 @@ class _PlayScreenState extends State<PlayScreen>
 
                 // Spacing below ad - Clear separation
                 SizedBox(height: adSpacing),
+                ],
 
                             ],
                           ),
 
+                          if (!_adSlotVisible) const SizedBox(height: 16),
                           // Play buttons
                           Padding(
                             padding: EdgeInsets.symmetric(

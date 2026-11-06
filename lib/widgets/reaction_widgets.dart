@@ -149,7 +149,7 @@ class _GameReactionPanelState extends State<GameReactionPanel> {
               ),
               const SizedBox(height: 2),
               muted
-                  ? const Text('Emoji off', style: TextStyle(fontSize: 12, color: Colors.grey))
+                  ? Text('Emoji off', style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant))
                   : shown.isEmpty
                   ? const Text('–', style: TextStyle(fontSize: 13))
                   : Wrap(

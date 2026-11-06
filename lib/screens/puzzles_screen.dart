@@ -119,48 +119,41 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
 
           return SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Header section
-                  Text(
-                    'Choose Difficulty',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Practice tactical chess problems to improve your skills',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.emoji_events_outlined),
-                      title: const Text('Rated puzzles'),
-                      subtitle: const Text('Puzzle rating and practice by theme'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const PuzzleRatedScreen()),
+                  // Two compact shortcut tiles side by side
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildShortcutTile(
+                          context,
+                          icon: Icons.emoji_events_outlined,
+                          label: 'Rated',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const PuzzleRatedScreen(),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  Card(
-                    child: ListTile(
-                      leading: const Icon(Icons.psychology_alt_outlined),
-                      title: const Text('My blunders'),
-                      subtitle: const Text('Puzzles from your own lost games'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const MyBlundersScreen()),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildShortcutTile(
+                          context,
+                          icon: Icons.psychology_alt_outlined,
+                          label: 'My blunders',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const MyBlundersScreen(),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
 
                   // Difficulty cards
                   Expanded(
@@ -185,6 +178,43 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
     );
   }
 
+  Widget _buildShortcutTile(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+          child: Row(
+            children: [
+              Icon(icon, size: 22, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildDifficultyCard(
     BuildContext context,
     PuzzleDifficulty difficulty,
@@ -199,7 +229,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
     final totalCount = puzzles.length;
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 10),
       child: Card(
         elevation: 2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -208,7 +238,7 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
               _onDifficultySelected(context, difficulty, puzzleProvider),
           borderRadius: BorderRadius.circular(16),
           child: Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16),
               gradient: _getDifficultyGradient(difficulty),
@@ -246,21 +276,21 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
 
                     // Difficulty icon
                     Container(
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
                         _getDifficultyIcon(difficulty),
                         color: Colors.white,
-                        size: 28,
+                        size: 22,
                       ),
                     ),
                   ],
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 10),
 
                 // Progress section
                 Row(
@@ -308,8 +338,8 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
                     // Completion percentage
                     Container(
                       padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 6,
+                        horizontal: 10,
+                        vertical: 4,
                       ),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.2),

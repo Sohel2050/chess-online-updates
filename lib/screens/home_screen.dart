@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:developer';
 import 'package:flutter/material.dart';
+import '../widgets/dark_surface.dart';
 import 'package:flutter_chess_app/models/game_room_model.dart';
 import 'package:flutter_chess_app/providers/game_provider.dart';
 import 'package:flutter_chess_app/providers/connectivity_provider.dart';
@@ -338,7 +339,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         // Use the current user from the provider, fallback to widget.user if null
         final currentUser = userProvider.user ?? widget.user;
 
-        return Scaffold(
+        return DarkSurface(child: Scaffold(
           backgroundColor: const Color(0xFF0B0F0D),
           appBar: AppBar(
             backgroundColor: const Color(0xFF0B0F0D),
@@ -779,7 +780,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ],
           ),
-        );
+        ));
       },
     );
   }

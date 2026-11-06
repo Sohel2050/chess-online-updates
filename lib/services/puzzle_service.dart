@@ -30,14 +30,14 @@ class PuzzleService {
       'id': id,
       'fen': json['fen'],
       'solution': List<String>.from(json['solution'] ?? const []),
-      'objective': theme != null
-          ? 'Find the winning move ($theme)'
-          : 'Find the best move',
+      'objective': (json['objective'] is String && (json['objective'] as String).isNotEmpty)
+          ? json['objective']
+          : (theme != null ? 'Find the winning move ($theme)' : 'Find the best move'),
       'difficulty': json['difficulty'] ?? 'medium',
-      'hints': const [],
+      'hints': json['hints'] is List ? List<String>.from(json['hints']) : const <String>[],
       'rating': json['rating'] ?? 1200,
       'tags': theme != null ? [theme] : const [],
-      'opponentPlaysFirst': false,
+      'opponentPlaysFirst': json['opponentPlaysFirst'] == true,
     });
   }
 
@@ -51,13 +51,13 @@ class PuzzleService {
 
     try {
       _logger.i('Loading puzzles from backend');
-      final result = await _api.get('/puzzles', query: {'limit': 500});
+      final result = await _api.get('/puzzles', query: {'limit': 2000});
       final puzzlesJson = result['puzzles'] as List;
 
       if (puzzlesJson.isEmpty) {
         _logger.w('No puzzles returned by backend, using fallback puzzles');
-        _cachedPuzzles = FallbackPuzzles.getFallbackPuzzles();
-        return _cachedPuzzles!;
+        // Not cached: the next load must retry the backend.
+        return FallbackPuzzles.getFallbackPuzzles();
       }
 
       final List<PuzzleModel> validPuzzles = [];
@@ -83,8 +83,8 @@ class PuzzleService {
         _logger.w(
           'No valid puzzles found from backend, using fallback puzzles',
         );
-        _cachedPuzzles = FallbackPuzzles.getFallbackPuzzles();
-        return _cachedPuzzles!;
+        // Not cached: the next load must retry the backend.
+        return FallbackPuzzles.getFallbackPuzzles();
       }
 
       if (invalidCount > 0) {
@@ -100,8 +100,8 @@ class PuzzleService {
       _logger.e(
         'Error loading puzzles from backend: $e, using fallback puzzles',
       );
-      _cachedPuzzles = FallbackPuzzles.getFallbackPuzzles();
-      return _cachedPuzzles!;
+      // Not cached: the next load must retry the backend.
+      return FallbackPuzzles.getFallbackPuzzles();
     }
   }
 

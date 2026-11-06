@@ -10,7 +10,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Privacy Policy')),
-      body: const SingleChildScrollView(
+      body: SingleChildScrollView(
         padding: EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -22,7 +22,7 @@ class PrivacyPolicyScreen extends StatelessWidget {
             SizedBox(height: 8),
             Text(
               'Last updated: October 2026',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
+              style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
             SizedBox(height: 24),
             _SectionWidget(

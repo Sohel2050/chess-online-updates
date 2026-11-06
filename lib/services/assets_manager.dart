@@ -4,8 +4,8 @@ class AssetsManager {
 
   static String appLogo = '$icons/foreground.png';
   static String micIcon = '$icons/mic_icon.png';
-  static String aiThinking = '$icons/ai_thinking.jpg';
-  static String undoButton = '$icons/undo_btn.jpg';
+  static String aiThinking = '$icons/ai_thinking.png';
+  static String undoButton = '$icons/undo_btn.png';
   static String appIcon = '$icons/icon2.png';
 
   static String userIcon = '$images/user_icon.png';

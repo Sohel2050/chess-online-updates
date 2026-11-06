@@ -38,15 +38,15 @@ extension PuzzleDifficultyExtension on PuzzleDifficulty {
   String get ratingRange {
     switch (this) {
       case PuzzleDifficulty.beginner:
-        return '800-1000';
+        return '600-1050';
       case PuzzleDifficulty.easy:
-        return '1000-1200';
+        return '1050-1250';
       case PuzzleDifficulty.medium:
-        return '1200-1400';
+        return '1250-1650';
       case PuzzleDifficulty.hard:
-        return '1400-1600';
+        return '1650-2100';
       case PuzzleDifficulty.expert:
-        return '1600+';
+        return '2100+';
     }
   }
 }
