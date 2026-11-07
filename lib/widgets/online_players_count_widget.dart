@@ -55,7 +55,7 @@ class _OnlinePlayersCountWidgetState extends State<OnlinePlayersCountWidget> {
             final online = stats?['online'] ?? 0;
             final isLoading =
                 snapshot.connectionState == ConnectionState.waiting &&
-                    !snapshot.hasData;
+                !snapshot.hasData;
 
             if (isLoading) {
               return SizedBox(

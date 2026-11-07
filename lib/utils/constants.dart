@@ -208,6 +208,13 @@ class Constants {
     '3 min + 5s bonus 3s': blitzRating,
   };
 
+  /// Name shown to players for a game mode (the stored key stays 'Blitz3').
+  static String modeLabel(String title) => title == blitz3 ? 'Blitz' : title;
+
+  /// Short line shown under the mode name on the Play screen cards.
+  static String modeSubtitle(String timeControl) =>
+      timeControl == '3 min + 5s bonus 3s' ? '3 min/move' : timeControl;
+
   static const List<Map<String, dynamic>> gameModes = [
     {'title': classical, 'timeControl': '60 sec/move', 'icon': Icons.timer},
     {'title': fast, 'timeControl': '30 sec/move', 'icon': Icons.speed},

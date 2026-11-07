@@ -6,8 +6,10 @@ import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:provider/provider.dart';
 import 'package:squares/squares.dart';
 
-/// "Play With Computer" dialog content: pick your colour (White / Black) and the computer strength, with a live summary and a big Start
-/// button. Calls [onConfirm] with the chosen difficulty level and colour.
+/// "Play With Computer" dialog content: pick your colour (White / Black) and the
+/// computer strength. The options scroll if the screen is small; the summary and
+/// the Start button always stay visible at the bottom.
+/// Calls [onConfirm] with the chosen difficulty level and colour.
 class CPUDifficultyDialog extends StatefulWidget {
   final Function(int difficulty, int playerColor) onConfirm;
 
@@ -33,150 +35,138 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
   Color get _accent =>
       _levelColors[_selectedDifficulty.clamp(0, _levelColors.length - 1)];
 
-  int _resolveColor() {
-    switch (_color) {
-      case _ColorChoice.white:
-        return Squares.white;
-      case _ColorChoice.black:
-        return Squares.black;
-    }
-  }
+  int _resolveColor() =>
+      _color == _ColorChoice.white ? Squares.white : Squares.black;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final difficulty = Constants.difficulties.firstWhere(
-          (d) => d[Constants.level] == _selectedDifficulty,
+      (d) => d[Constants.level] == _selectedDifficulty,
       orElse: () => Constants.difficulties.first,
     );
-    final colorLabel = switch (_color) {
-      _ColorChoice.white => 'White',
-      _ColorChoice.black => 'Black',
-    };
+    final colorLabel = _color == _ColorChoice.white ? 'White' : 'Black';
 
-    return SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _sectionTitle(context, Icons.palette_outlined, 'Play as'),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _colorCard(
-                  context,
-                  choice: _ColorChoice.white,
-                  label: 'White',
-                  badge: _pieceBadge('assets/pieces/chessnut/wK.png', Colors.white),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _colorCard(
-                  context,
-                  choice: _ColorChoice.black,
-                  label: 'Black',
-                  badge: _pieceBadge('assets/pieces/chessnut/bK.png', const Color(0xFF263238)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          _sectionTitle(context, Icons.speed_rounded, 'Computer strength'),
-          const SizedBox(height: 10),
-          GridView.builder(
-            shrinkWrap: true,
-            padding: EdgeInsets.zero,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: Constants.difficulties.length,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 10,
-              mainAxisSpacing: 10,
-              mainAxisExtent: 148,
-            ),
-            itemBuilder: (context, i) => _difficultyCard(
-              context,
-              Constants.difficulties[i],
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Live summary of what will start
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: _accent.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Flexible(
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.smart_toy_outlined, color: _accent, size: 20),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'You play $colorLabel vs ${difficulty[Constants.name]} computer',
-                    style: textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+                _sectionTitle(context, Icons.palette_outlined, 'Play as'),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _colorCard(
+                        context,
+                        choice: _ColorChoice.white,
+                        label: 'White',
+                        badge: _pieceBadge(
+                          'assets/pieces/chessnut/wK.png',
+                          Colors.white,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _colorCard(
+                        context,
+                        choice: _ColorChoice.black,
+                        label: 'Black',
+                        badge: _pieceBadge(
+                          'assets/pieces/chessnut/bK.png',
+                          const Color(0xFF37474F),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 18),
+                _sectionTitle(context, Icons.speed_rounded, 'Computer strength'),
+                const SizedBox(height: 10),
+                for (final d in Constants.difficulties) _difficultyRow(context, d),
               ],
             ),
           ),
-          const SizedBox(height: 18),
+        ),
+        const SizedBox(height: 12),
 
-          Row(
+        // Live summary of what will start
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: _accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Expanded(
-                child: OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    side: BorderSide(color: scheme.outlineVariant),
-                  ),
-                  onPressed: () {
-                    // dispose stockfish engine if needed
-                    context.read<GameProvider>().disposeStockfish();
-                    Navigator.of(context).pop(); // close without action
-                  },
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  icon: const Icon(Icons.play_arrow_rounded, size: 26),
-                  onPressed: () {
-                    final color = _resolveColor();
-                    log(
-                      'Selected Difficulty: $_selectedDifficulty, Color: $color',
-                    );
-                    widget.onConfirm(_selectedDifficulty, color);
-                  },
-                  label: const Text(
-                    'Start Game',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              Icon(Icons.smart_toy_outlined, color: _accent, size: 20),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  'You play $colorLabel vs ${difficulty[Constants.name]} computer',
+                  textAlign: TextAlign.center,
+                  style: textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
             ],
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  side: BorderSide(color: scheme.outlineVariant),
+                ),
+                onPressed: () {
+                  // dispose stockfish engine if needed
+                  context.read<GameProvider>().disposeStockfish();
+                  Navigator.of(context).pop(); // close without action
+                },
+                child: const Text('Cancel'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 2,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded, size: 26),
+                onPressed: () {
+                  final color = _resolveColor();
+                  log('Selected Difficulty: $_selectedDifficulty, Color: $color');
+                  widget.onConfirm(_selectedDifficulty, color);
+                },
+                label: const Text(
+                  'Start Game',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -197,9 +187,9 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
 
   Widget _pieceBadge(String asset, Color bg) {
     return Container(
-      width: 52,
-      height: 52,
-      padding: const EdgeInsets.all(6),
+      width: 44,
+      height: 44,
+      padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
         color: bg,
         shape: BoxShape.circle,
@@ -210,18 +200,18 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
   }
 
   Widget _colorCard(
-      BuildContext context, {
-        required _ColorChoice choice,
-        required String label,
-        required Widget badge,
-      }) {
+    BuildContext context, {
+    required _ColorChoice choice,
+    required String label,
+    required Widget badge,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     final selected = _color == choice;
     return GestureDetector(
       onTap: () => setState(() => _color = choice),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: selected
               ? scheme.primary.withValues(alpha: 0.16)
@@ -233,23 +223,34 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
           ),
           boxShadow: selected
               ? [
-            BoxShadow(
-              color: scheme.primary.withValues(alpha: 0.25),
-              blurRadius: 10,
-              offset: const Offset(0, 3),
-            ),
-          ]
+                  BoxShadow(
+                    color: scheme.primary.withValues(alpha: 0.25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ]
               : null,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        child: Row(
           children: [
             badge,
-            const SizedBox(height: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                ),
+              ),
+            ),
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 180),
+              opacity: selected ? 1 : 0,
+              child: Icon(
+                Icons.check_circle_rounded,
+                color: scheme.primary,
+                size: 22,
               ),
             ),
           ],
@@ -258,104 +259,117 @@ class _CPUDifficultyDialogState extends State<CPUDifficultyDialog> {
     );
   }
 
-  Widget _difficultyCard(BuildContext context, Map<String, dynamic> d) {
+  /// One strength option as a full-width row: icon, name + description and a
+  /// signal-strength meter on the right.
+  Widget _difficultyRow(BuildContext context, Map<String, dynamic> d) {
     final scheme = Theme.of(context).colorScheme;
     final int level = d[Constants.level];
     final accent = _levelColors[level.clamp(0, _levelColors.length - 1)];
     final selected = _selectedDifficulty == level;
 
-    return GestureDetector(
-      onTap: () => setState(() => _selectedDifficulty = level),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-        decoration: BoxDecoration(
-          gradient: selected
-              ? LinearGradient(
-            colors: [
-              accent.withValues(alpha: 0.25),
-              accent.withValues(alpha: 0.08),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          )
-              : null,
-          color: selected ? null : scheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: selected ? accent : Colors.transparent,
-            width: 2,
-          ),
-          boxShadow: selected
-              ? [
-            BoxShadow(
-              color: accent.withValues(alpha: 0.28),
-              blurRadius: 10,
-              offset: const Offset(0, 3),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () => setState(() => _selectedDifficulty = level),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            gradient: selected
+                ? LinearGradient(
+                    colors: [
+                      accent.withValues(alpha: 0.25),
+                      accent.withValues(alpha: 0.08),
+                    ],
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                  )
+                : null,
+            color: selected ? null : scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected ? accent : Colors.transparent,
+              width: 2,
             ),
-          ]
-              : null,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: selected ? accent : accent.withValues(alpha: 0.18),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    d[Constants.icon] as IconData,
-                    size: 22,
-                    color: selected ? Colors.white : accent,
-                  ),
-                ),
-                const Spacer(),
-                if (selected)
-                  Icon(Icons.check_circle_rounded, color: accent, size: 22),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              d[Constants.name] as String,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 4),
-            // Strength meter: 1..4 bars
-            Row(
-              children: List.generate(4, (i) {
-                final on = i <= level;
-                return Expanded(
-                  child: Container(
-                    height: 5,
-                    margin: EdgeInsets.only(right: i == 3 ? 0 : 4),
-                    decoration: BoxDecoration(
-                      color: on ? accent : accent.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(3),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: accent.withValues(alpha: 0.25),
+                      blurRadius: 10,
+                      offset: const Offset(0, 3),
                     ),
-                  ),
-                );
-              }),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              d[Constants.description] as String,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-                height: 1.2,
+                  ]
+                : null,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: selected ? accent : accent.withValues(alpha: 0.18),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  d[Constants.icon] as IconData,
+                  size: 22,
+                  color: selected ? Colors.white : accent,
+                ),
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      d[Constants.name] as String,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: selected ? FontWeight.w800 : FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      d[Constants.description] as String,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              _strengthBars(level, accent),
+              const SizedBox(width: 8),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 180),
+                opacity: selected ? 1 : 0,
+                child: Icon(Icons.check_circle_rounded, color: accent, size: 22),
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  /// Four rising bars; the first level+1 are filled.
+  Widget _strengthBars(int level, Color accent) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: List.generate(4, (i) {
+        final on = i <= level;
+        return Container(
+          width: 5,
+          height: 8.0 + i * 4,
+          margin: EdgeInsets.only(right: i == 3 ? 0 : 3),
+          decoration: BoxDecoration(
+            color: on ? accent : accent.withValues(alpha: 0.22),
+            borderRadius: BorderRadius.circular(3),
+          ),
+        );
+      }),
     );
   }
 }

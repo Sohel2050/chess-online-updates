@@ -72,7 +72,8 @@ class _OptionsScreenState extends State<OptionsScreen> {
       canPop: !dirty,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
-        final nav = Navigator.of(context);
+        // Options is a tab of the home screen, not its own route: never pop the
+        // navigator here (that closed/crashed the app). Just apply or drop the draft.
         final choice = await _askApply(context);
         if (!mounted) return;
         if (choice == 'apply') {
@@ -82,9 +83,8 @@ class _OptionsScreenState extends State<OptionsScreen> {
             white: _white,
             black: _black,
           );
-          nav.pop();
         } else if (choice == 'discard') {
-          nav.pop();
+          setState(() => _loadFrom(settingsProvider));
         }
         // 'keep' or dialog dismissed: stay on the screen.
       },
@@ -468,6 +468,20 @@ class _OptionsScreenState extends State<OptionsScreen> {
         ),
       );
 
+  /// Usable themes first (free / already unlocked / the saved one), then the
+  /// locked ones in order of the level they need.
+  List<BoardStyle> _sortedBoardStyles() {
+    final indexed = boardStyles.asMap().entries.toList();
+    indexed.sort((a, b) {
+      final la = _isLocked(boardLevelNeeded(a.value.id), a.value.id == _savedBoardId) ? 1 : 0;
+      final lb = _isLocked(boardLevelNeeded(b.value.id), b.value.id == _savedBoardId) ? 1 : 0;
+      if (la != lb) return la.compareTo(lb);
+      final c = boardLevelNeeded(a.value.id).compareTo(boardLevelNeeded(b.value.id));
+      return c != 0 ? c : a.key.compareTo(b.key);
+    });
+    return indexed.map((e) => e.value).toList();
+  }
+
   Widget _buildBoardThemePicker(BuildContext context, SettingsProvider provider) {
     final current = boardStyleById(_boardId);
     return SizedBox(
@@ -476,7 +490,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         children: [
-          for (final st in boardStyles)
+          for (final st in _sortedBoardStyles())
             _pickerCard(context,
                 selected: st.id == current.id,
                 onTap: () => setState(() => _boardId = st.id),

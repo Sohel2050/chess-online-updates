@@ -1,5 +1,6 @@
 import 'package:country_flags/country_flags.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/screens/login_screen.dart';
 import 'package:flutter_chess_app/screens/privacy_policy_screen.dart';
 import 'package:flutter_chess_app/services/auth_service.dart';
@@ -269,10 +270,24 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const SizedBox(height: 32),
-                    Icon(
-                      Icons.sports_esports,
-                      size: 80,
-                      color: Theme.of(context).colorScheme.primary,
+                    ClipOval(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFFFB300).withValues(alpha: 0.35),
+                              blurRadius: 24,
+                            ),
+                          ],
+                        ),
+                        child: Image.asset(
+                          AssetsManager.appIcon,
+                          width: 100,
+                          height: 100,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 24),
                     Text(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/providers/user_provider.dart';
 import 'package:flutter_chess_app/screens/home_screen.dart';
 import 'package:flutter_chess_app/screens/forgot_password_screen.dart';
@@ -122,10 +123,24 @@ class _LoginScreenState extends State<LoginScreen> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     // Logo and Title
-                    Icon(
-                      Icons.sports_esports,
-                      size: 80,
-                      color: Theme.of(context).colorScheme.primary,
+                    ClipOval(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFFFB300).withValues(alpha: 0.35),
+                              blurRadius: 24,
+                            ),
+                          ],
+                        ),
+                        child: Image.asset(
+                          AssetsManager.appIcon,
+                          width: 120,
+                          height: 120,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 24),
                     Text(

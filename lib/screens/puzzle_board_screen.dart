@@ -899,18 +899,6 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
             title: Text('${widget.puzzle.difficulty.displayName} Puzzle'),
             backgroundColor: Theme.of(context).colorScheme.surface,
             elevation: 0,
-            actions: [
-              IconButton(
-                onPressed: _isPlayingSolution ? null : _requestHint,
-                icon: const Icon(Icons.lightbulb_outline_rounded),
-                tooltip: 'Show best-move arrow',
-              ),
-              IconButton(
-                onPressed: _isPlayingSolution ? null : _resetPuzzle,
-                icon: const Icon(Icons.refresh),
-                tooltip: 'Reset Puzzle',
-              ),
-            ],
           ),
           body: SafeArea(
             child: Column(
@@ -974,57 +962,102 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                   ),
                 ),
 
-                // Show Solution: auto-plays the whole solution
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Consumer<PuzzleProvider>(
-                      builder: (context, puzzleProvider, child) {
-                        final wrong =
-                            puzzleProvider.currentSession?.hasIncorrectMove ??
-                            false;
-                        return OutlinedButton.icon(
-                          onPressed: _isPlayingSolution ? null : _playSolution,
-                          icon: const Icon(Icons.play_arrow),
-                          label: Text(_isPlayingSolution ? 'Showing Solution...' : 'Show Solution'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.deepOrange,
-                            side: BorderSide(
-                              color: Colors.deepOrange.withValues(
-                                alpha: wrong ? 1 : 0.5,
-                              ),
-                              width: wrong ? 2 : 1,
-                            ),
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-
-                // Bottom action buttons
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _resetPuzzle,
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('Reset'),
-                        ),
-                      ),
-
-                    ],
-                  ),
-                ),
+                // Hint / Reset / Solution in one bar
+                _buildActionBar(context),
               ],
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildActionBar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final busy = _isPlayingSolution;
+
+    Widget tile({
+      required IconData icon,
+      required String label,
+      required Color color,
+      required VoidCallback? onTap,
+      bool emphasize = false,
+    }) {
+      final enabled = onTap != null;
+      final c = enabled ? color : scheme.onSurface.withValues(alpha: 0.35);
+      return Expanded(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: emphasize ? Border.all(color: c, width: 2) : null,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: c.withValues(alpha: 0.15),
+                  ),
+                  child: Icon(icon, color: c, size: 24),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: c, fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: Container(
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Consumer<PuzzleProvider>(
+          builder: (context, puzzleProvider, child) {
+            final wrong = puzzleProvider.currentSession?.hasIncorrectMove ?? false;
+            return Row(
+              children: [
+                tile(
+                  icon: Icons.lightbulb_rounded,
+                  label: 'Hint',
+                  color: Colors.amber.shade700,
+                  onTap: busy ? null : _requestHint,
+                ),
+                tile(
+                  icon: Icons.refresh_rounded,
+                  label: 'Reset',
+                  color: scheme.primary,
+                  onTap: busy ? null : _resetPuzzle,
+                ),
+                tile(
+                  icon: Icons.play_arrow_rounded,
+                  label: busy ? 'Showing...' : 'Solution',
+                  color: Colors.deepOrange,
+                  onTap: busy ? null : _playSolution,
+                  emphasize: wrong,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 

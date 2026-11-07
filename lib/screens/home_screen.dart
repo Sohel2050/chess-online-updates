@@ -25,6 +25,7 @@ import 'package:flutter_chess_app/services/game_socket_service.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
 import 'package:flutter_chess_app/widgets/loading_dialog.dart';
 import 'package:flutter_chess_app/widgets/offline_indicator.dart';
+import 'package:flutter_chess_app/widgets/online_friends_pill.dart';
 import 'package:flutter_chess_app/widgets/profile_image_widget.dart';
 import 'package:flutter_chess_app/widgets/unread_badge_widget.dart';
 import 'package:provider/provider.dart';
@@ -344,6 +345,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           appBar: AppBar(
             backgroundColor: const Color(0xFF0B0F0D),
             elevation: 0,
+            titleSpacing: 12,
             title: Row(
               children: [
                 GestureDetector(
@@ -403,41 +405,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      currentUser.displayName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
+                const SizedBox(width: 10),
+                // Flexible: a long name / rating gets "..." instead of overflowing.
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        currentUser.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
                       ),
-                    ),
-                    Row(
-                      children: [
-                        const Icon(Icons.star, color: Color(0xFFFACC15), size: 14),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Rating: ',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.7),
-                            fontSize: 13,
+                      Row(
+                        children: [
+                          const Icon(Icons.star, color: Color(0xFFFACC15), size: 14),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text: 'Rating: ',
+                                    style: TextStyle(
+                                      color: Colors.white.withValues(alpha: 0.7),
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: '${currentUser.classicalRating}',
+                                    style: const TextStyle(
+                                      color: Color(0xFF22C55E),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                        Text(
-                          '${currentUser.classicalRating}',
-                          style: const TextStyle(
-                            color: Color(0xFF22C55E),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -453,7 +470,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           ? const Color(0xFFF59E0B)
                           : const Color(0xFFF97316));
                   return Padding(
-                    padding: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.only(right: 4),
                     child: GestureDetector(
                       onTap: () {
                         Navigator.of(context).push(
@@ -503,33 +520,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   );
                 },
               ),
-              // Friends count pill
+              // Friends online / all players online, e.g. 3/5900
               Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF22C55E).withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: const Color(0xFF22C55E).withValues(alpha: 0.4),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.people, color: Color(0xFF22C55E), size: 16),
-                      const SizedBox(width: 6),
-                      Text(
-                        '${currentUser.friends.length}',
-                        style: const TextStyle(
-                          color: Color(0xFF22C55E),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
+                padding: const EdgeInsets.only(right: 0),
+                child: OnlineFriendsPill(
+                  userId: currentUser.isGuest ? null : currentUser.uid,
                 ),
               ),
               // check if is admin we show the admin icon
