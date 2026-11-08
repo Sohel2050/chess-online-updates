@@ -125,31 +125,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _endAdHandled = false; // new game: one ad allowed again
       _rematchExplicitlyAccepted = false; // Reset rematch flag for new games
 
-      // For online games, we ensure the listener is active if it's not already
-      // This handles cases where GameProvider might be re-initialized
-      // or if the stream was somehow interrupted.
-      if (_gameProvider.isOnlineGame &&
-          _gameProvider.onlineGameRoom != null &&
-          _gameProvider.gameRoomSubscription == null) {
-        // Re-establish the subscription if it's null (e.g., provider was disposed and re-created)
-        _gameProvider.gameRoomSubscription = _gameProvider.onlineGameRoomUpdates
-            .listen(
-              _gameProvider.onOnlineGameRoomUpdate,
-              onError: (error) {
-                _gameProvider.logger.e(
-                  'Error re-streaming game room ${_gameProvider.onlineGameRoom!.gameId}: $error',
-                );
-              },
-              onDone: () {
-                _gameProvider.logger.i(
-                  'Game room ${_gameProvider.onlineGameRoom!.gameId} stream closed (re-established).',
-                );
-              },
-            );
-        _gameProvider.logger.i(
-          'Re-established game room subscription in GameScreen.initState',
-        );
-      }
+      // GameProvider already processes socket room updates centrally.
+      // Do not subscribe this screen back into onOnlineGameRoomUpdate:
+      // that method republishes to onlineGameRoomUpdates and would create
+      // a feedback loop. Audio-room updates use their separate listener below.
     });
 
     // Listen for draw offer rejection

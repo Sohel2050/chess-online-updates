@@ -113,7 +113,17 @@ class _ChatScreenState extends State<ChatScreen> {
       widget.currentUser.uid!,
       widget.otherUser.uid!,
     );
-    _chatService.markMessagesAsRead(_chatRoomId, widget.currentUser.uid!);
+    () async {
+      final otherId = widget.otherUser.uid!;
+      debugPrint('[chat/read] start otherId=$otherId');
+      try {
+        final result = await _chatService.markMessagesAsRead(_chatRoomId, otherId);
+        debugPrint('[chat/read] response=$result');
+      } catch (e, st) {
+        debugPrint('[chat/read] FAILED: $e');
+        debugPrintStack(stackTrace: st);
+      }
+    }();
 
     _messageController.addListener(_onTextChanged);
     _typingSub = GameSocketService.instance.onChatTyping.listen((e) {

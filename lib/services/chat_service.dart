@@ -158,10 +158,10 @@ class ChatService {
     }
   }
 
-  Future<void> markMessagesAsRead(String chatRoomId, String receiverId) async {
+  Future<Map<String, dynamic>> markMessagesAsRead(String chatRoomId, String receiverId) async {
     try {
-      // receiverId here (per the old signature) is the *other* participant.
-      await _api.put('/chat/$receiverId/read');
+      // receiverId is the other participant.
+      return await _api.put('/chat/$receiverId/read');
     } catch (e) {
       _logger.e('Error marking messages as read: $e');
       rethrow;
