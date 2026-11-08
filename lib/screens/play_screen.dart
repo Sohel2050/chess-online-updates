@@ -19,7 +19,7 @@ import 'package:flutter_chess_app/services/admin_service.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
 import '../widgets/daily_puzzle_card.dart';
-import '../widgets/game_mode_card.dart';
+import '../widgets/game_mode_card.dart' show GameModeCard, kModeBannerAspect;
 import '../widgets/main_app_button.dart';
 import '../widgets/play_option_tile.dart';
 
@@ -184,11 +184,184 @@ class _PlayScreenState extends State<PlayScreen>
   void dispose() {
     debugPrint('PlayScreen: Disposing PlayScreen');
     _playFeaturesSub?.cancel();
+    _countdownTimer?.cancel();
     // Native ads are now handled by MonetizationBannerWidget
     super.dispose();
   }
 
   /// Why an online search ended without a game (shown instead of closing silently).
+  /// How long we search for a human opponent before falling back to a computer game.
+  static const Duration _onlineSearchTimeout = Duration(seconds: 30);
+
+  Timer? _countdownTimer;
+
+  /// Shows 30, 29, ... 0 in the searching dialog; stops by itself once the dialog is gone.
+  void _startSearchCountdown() {
+    _countdownTimer?.cancel();
+    final total = _onlineSearchTimeout.inSeconds;
+    LoadingDialog.countdownTotal = total;
+    LoadingDialog.countdown.value = total;
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      final left = LoadingDialog.countdown.value;
+      if (left == null || left <= 0) {
+        t.cancel();
+        return;
+      }
+      LoadingDialog.countdown.value = left - 1;
+    });
+  }
+
+  /// Starts a game vs the computer after the online search found nobody.
+  Future<void> _startCpuFallbackGame(
+    GameProvider gameProvider,
+    String timeControl,
+  ) async {
+    if (!mounted) return;
+    final playComputer = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.85, end: 1.0),
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutBack,
+          builder: (context, scale, child) => Transform.scale(
+            scale: scale,
+            child: Opacity(opacity: scale.clamp(0.0, 1.0), child: child),
+          ),
+          child: Dialog(
+          elevation: 16,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        cs.primary.withValues(alpha: 0.25),
+                        cs.primary.withValues(alpha: 0.06),
+                      ],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: cs.primary.withValues(alpha: 0.25),
+                        blurRadius: 18,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Icon(Icons.person_search, size: 38, color: cs.primary),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'No opponent found',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Nobody is available right now.\nDo you want to play against the computer?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: cs.onSurface.withValues(alpha: 0.7)),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(ctx).pop(false),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text('No'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: () => Navigator.of(ctx).pop(true),
+                        icon: const Icon(Icons.computer, size: 18),
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        label: const Text('Yes'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          ),
+        );
+      },
+    );
+    if (playComputer != true || !mounted) return; // "No": just dismiss
+    gameProvider.setLoading(true);
+    LoadingDialog.show(
+      context,
+      message: 'Initializing Stockfish engine...',
+      barrierDismissible: false,
+    );
+    try {
+      await gameProvider.setVsCPU(true);
+      await gameProvider.initializeStockfish();
+      gameProvider.setLoading(false);
+      if (!mounted) return;
+      LoadingDialog.hide(context);
+
+      final result = await AnimatedDialog.show(
+        context: context,
+        title: 'Play With Computer',
+        maxWidth: 400,
+        contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: CPUDifficultyDialog(
+          onConfirm: (difficulty, playerColor) {
+            gameProvider.setGameLevel(difficulty);
+            gameProvider.setPlayer(playerColor);
+            gameProvider.setTimeControl(timeControl);
+            Navigator.of(context).pop({
+              'difficulty': difficulty,
+              'playerColor': playerColor,
+            });
+          },
+        ),
+      );
+
+      if (result != null && result is Map && mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => GameScreen(user: widget.user)),
+        );
+      }
+    } catch (e) {
+      gameProvider.setLoading(false);
+      if (mounted) {
+        LoadingDialog.hide(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to initialize chess engine: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   String _searchEndedMessage(Object e) {
     if (e is TimeoutException) {
       return 'No opponent found. Matches are made with other online players, so try again when more players are online, or play the computer.';
@@ -233,9 +406,11 @@ class _PlayScreenState extends State<PlayScreen>
             // Calculate dynamic heights based on available space
             final availableHeight = constraints.maxHeight;
             const onlineCountHeight = 0.0; // live counters moved to the home header / mode cards
-            final carouselHeight = isVerySmallScreen
-                ? 140.0
-                : (isSmallScreen ? 160.0 : 180.0);
+            // Carousel height is derived from the banner itself (arrows take
+            // ~64dp of width), so there is no empty band above/below the card.
+            const indicatorHeight = 18.0; // dots row right under the card
+            final baseCarouselHeight =
+                (screenWidth - 64) / kModeBannerAspect + 4 + indicatorHeight;
 
             // Calculate button area to fit within remaining space
             // LevelPlay native (small template) needs ~175dp; smaller screens
@@ -243,8 +418,8 @@ class _PlayScreenState extends State<PlayScreen>
             final adContainerHeight = isVerySmallScreen
                 ? 92.0
                 : (isSmallScreen ? 108.0 : 190.0);
-            final adSpacing = isVerySmallScreen ? 10.0 : 16.0; // gap below ad
-            final adTopGap = isVerySmallScreen ? 10.0 : 16.0; // gap above ad
+            final adSpacing = isVerySmallScreen ? 4.0 : 8.0; // gap below ad
+            const adTopGap = 0.0; // carousel indicator row already gives the gap above the ad
             final adBlockHeight = _adSlotVisible
                 ? adContainerHeight + adSpacing + adTopGap
                 : 0.0;
@@ -252,7 +427,7 @@ class _PlayScreenState extends State<PlayScreen>
             // Reserve space for buttons - ensure it fits
             final baseReservedHeight =
                 onlineCountHeight +
-                carouselHeight +
+                baseCarouselHeight +
                 adBlockHeight;
 
             // Daily Puzzle card: shown only when the screen has room for it
@@ -265,6 +440,10 @@ class _PlayScreenState extends State<PlayScreen>
                     (isVerySmallScreen ? 150.0 : 160.0) +
                     dailyCardHeight +
                     dailyCardSpacing;
+
+            // Compact: the banner sits close under the app bar and the play
+            // buttons follow right under it (small gaps, nothing in between).
+            final carouselHeight = baseCarouselHeight;
 
             return Column(
               children: [
@@ -298,10 +477,10 @@ class _PlayScreenState extends State<PlayScreen>
                               onPressed: () =>
                                   _carouselController.previousPage(),
                               padding: EdgeInsets.all(
-                                isVerySmallScreen ? 8 : 12,
+                                4,
                               ),
                               constraints: BoxConstraints(
-                                minWidth: isVerySmallScreen ? 32 : 40,
+                                minWidth: 28,
                                 minHeight: isVerySmallScreen ? 32 : 40,
                               ),
                             ),
@@ -310,11 +489,8 @@ class _PlayScreenState extends State<PlayScreen>
                                 carouselController: _carouselController,
                                 options: CarouselOptions(
                                   height:
-                                      carouselHeight -
-                                      40, // Account for indicators
-                                  viewportFraction: screenWidth < 400
-                                      ? 0.85
-                                      : 0.8,
+                                      carouselHeight - indicatorHeight,
+                                  viewportFraction: 1.0,
                                   enlargeCenterPage: true,
                                   onPageChanged: (index, reason) {
                                     setState(() {
@@ -328,53 +504,40 @@ class _PlayScreenState extends State<PlayScreen>
                                   return SizedBox(
                                     width:
                                         MediaQuery.of(context).size.width *
-                                        (screenWidth < 400 ? 0.85 : 0.8),
-                                    child: Stack(
-                                      children: [
-                                        Positioned.fill(
-                                          child: GameModeCard(
-                                            title: mode[Constants.title],
-                                            timeControl:
-                                                mode[Constants.timeControl],
-                                            showLiveStats: true,
-                                            isSelected:
-                                                _selectedGameMode == index,
-                                            onTap: () {
-                                              setState(() {
-                                                _selectedGameMode = index;
-                                              });
-                                              _carouselController.animateToPage(
-                                                index,
-                                              );
-                                            },
-                                          ),
-                                        ),
-                                        // Online game modes (which modes to search in)
-                                        Positioned(
-                                          top: 8,
-                                          right: 8,
-                                          child: Tooltip(
-                                            message: 'Online game modes',
-                                            child: Material(
-                                              color: Colors.black38,
-                                              shape: const CircleBorder(),
-                                              child: InkWell(
-                                                customBorder:
-                                                    const CircleBorder(),
-                                                onTap: _showMatchModesDialog,
-                                                child: const Padding(
-                                                  padding: EdgeInsets.all(8),
-                                                  child: Icon(
-                                                    Icons.tune,
-                                                    size: 20,
-                                                    color: Colors.white,
-                                                  ),
-                                                ),
+                                        1.0,
+                                    child: GameModeCard(
+                                      title: mode[Constants.title],
+                                      timeControl: mode[Constants.timeControl],
+                                      showLiveStats: true,
+                                      isSelected: _selectedGameMode == index,
+                                      onTap: () {
+                                        setState(() {
+                                          _selectedGameMode = index;
+                                        });
+                                        _carouselController.animateToPage(
+                                          index,
+                                        );
+                                      },
+                                      // Online game modes (which modes to search in)
+                                      trailing: Tooltip(
+                                        message: 'Online game modes',
+                                        child: Material(
+                                          color: Colors.black38,
+                                          shape: const CircleBorder(),
+                                          child: InkWell(
+                                            customBorder: const CircleBorder(),
+                                            onTap: _showMatchModesDialog,
+                                            child: const Padding(
+                                              padding: EdgeInsets.all(8),
+                                              child: Icon(
+                                                Icons.tune,
+                                                size: 20,
+                                                color: Colors.white,
                                               ),
                                             ),
                                           ),
                                         ),
-                                      ],
+                                      ),
                                     ),
                                   );
                                 },
@@ -384,10 +547,10 @@ class _PlayScreenState extends State<PlayScreen>
                               icon: const Icon(Icons.arrow_forward_ios),
                               onPressed: () => _carouselController.nextPage(),
                               padding: EdgeInsets.all(
-                                isVerySmallScreen ? 8 : 12,
+                                4,
                               ),
                               constraints: BoxConstraints(
-                                minWidth: isVerySmallScreen ? 32 : 40,
+                                minWidth: 28,
                                 minHeight: isVerySmallScreen ? 32 : 40,
                               ),
                             ),
@@ -396,7 +559,7 @@ class _PlayScreenState extends State<PlayScreen>
                       ),
                       // Carousel indicators
                       SizedBox(
-                        height: 24,
+                        height: indicatorHeight,
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: _enabledGameModes.asMap().entries.map((
@@ -409,7 +572,7 @@ class _PlayScreenState extends State<PlayScreen>
                                 width: isVerySmallScreen ? 6.0 : 8.0,
                                 height: isVerySmallScreen ? 6.0 : 8.0,
                                 margin: EdgeInsets.symmetric(
-                                  vertical: 4.0,
+                                  vertical: 2.0,
                                   horizontal: isVerySmallScreen ? 2.0 : 3.0,
                                 ),
                                 decoration: BoxDecoration(
@@ -569,6 +732,8 @@ class _PlayScreenState extends State<PlayScreen>
                             },
                           );
 
+                          _startSearchCountdown();
+
                           try {
                             await gameProvider.startOnlineGameSearch(
                               userId: currentUser.uid!,
@@ -594,7 +759,16 @@ class _PlayScreenState extends State<PlayScreen>
                               }
 
                               // Wait for game to become active before navigating
-                              await gameProvider.waitForGameToStart();
+                              await gameProvider.waitForGameToStart(
+                                timeout: _onlineSearchTimeout,
+                              );
+
+                              // Cancel pressed while waiting: the wait was released, just close.
+                              if (!gameProvider.isOnlineGame) {
+                                if (context.mounted) LoadingDialog.hide(context);
+                                _gameSearchStartTime = null;
+                                return;
+                              }
 
                               gameProvider.setLoading(false);
                               _gameSearchStartTime = null; // Clear search timer
@@ -619,8 +793,20 @@ class _PlayScreenState extends State<PlayScreen>
                             }
                           } catch (e) {
                             dlog('Online search ended with: $e');
-                            gameProvider.setLoading(false);
                             _gameSearchStartTime = null; // Clear search timer
+                            if (e is TimeoutException) {
+                              // Nobody joined in time: leave the queue and start a game vs the computer.
+                              await gameProvider.cancelOnlineGameSearch();
+                              if (context.mounted) {
+                                LoadingDialog.hide(context);
+                                await _startCpuFallbackGame(
+                                  gameProvider,
+                                  timeControl,
+                                );
+                              }
+                              return;
+                            }
+                            gameProvider.setLoading(false);
                             if (context.mounted) {
                               LoadingDialog.hide(context);
                               ScaffoldMessenger.of(context).showSnackBar(

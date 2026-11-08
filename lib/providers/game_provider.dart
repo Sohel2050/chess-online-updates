@@ -116,6 +116,8 @@ class GameProvider extends ChangeNotifier {
   }
   bool _flipBoard = false;
   bool _stockfishInitialized = false;
+  /// Set when a search was cancelled (undo): its late "bestmove" is dropped.
+  bool _ignoreNextBestMove = false;
   final Logger _logger = Logger();
 
   // ---- practice coach (live warnings in games against the computer) ----
@@ -284,41 +286,11 @@ class GameProvider extends ChangeNotifier {
   bool get flipBoard => _flipBoard;
 
   /// True when Black is at the bottom of the board *as it is really drawn*.
-  /// (Playing Black the board may already come flipped from the state, so
-  /// [flipBoard] alone is not enough for drawing arrows.) The answer is read
-  /// from where the white king is drawn compared with where the FEN has it.
-  bool get blackAtBottom {
-    try {
-      final board = (_flipBoard ? _state.board.flipped() : _state.board) as dynamic;
-      final cells = (board as Iterable).map((e) => e.toString()).toList();
-      final i = cells.indexOf('K');
-      final fenRows = _game.fen.split(' ')[0].split('/');
-      var kFile = -1;
-      var kRank = -1;
-      for (var r = 0; r < fenRows.length; r++) {
-        var col = 0;
-        for (final ch in fenRows[r].split('')) {
-          final n = int.tryParse(ch);
-          if (n != null) {
-            col += n;
-          } else {
-            if (ch == 'K') {
-              kFile = col;
-              kRank = 7 - r; // 0 = rank 1
-            }
-            col++;
-          }
-        }
-      }
-      if (i >= 0 && kFile >= 0) {
-        final row = i ~/ 8;
-        final col = i % 8;
-        if (col == kFile && row == 7 - kRank) return false;
-        if (col == 7 - kFile && row == kRank) return true;
-      }
-    } catch (_) {}
-    return _flipBoard;
-  }
+  /// The state's board is already turned round for a Black player; the flip
+  /// button turns it once more. (The old way of reading it off the king's
+  /// square gave the wrong answer on a real phone, so the hint arrow was drawn
+  /// on the computer's side.)
+  bool get blackAtBottom => (_player == Squares.black) != _flipBoard;
 
   Logger get logger => _logger;
 
@@ -376,7 +348,12 @@ class GameProvider extends ChangeNotifier {
 
   List<String> get moveHistory => _moveHistory;
 
-  bool get canUndo => _moveHistory.isNotEmpty && _vsCPU;
+  /// Undo needs at least one move of MINE to take back (playing Black the
+  /// computer's first move comes first and is not mine).
+  bool get canUndo =>
+      _vsCPU &&
+      _fenHistory.isNotEmpty &&
+      _moveHistory.length >= (_player == Squares.black ? 2 : 1);
 
   ChatService get chatService => _chatService;
 
@@ -1472,9 +1449,22 @@ class GameProvider extends ChangeNotifier {
     }
 
     try {
-      // For VS CPU mode, we need to undo 2 moves (player + CPU response)
-      // If only 1 move was made, undo just that move
-      int movesToUndo = _moveHistory.length >= 2 ? 2 : 1;
+      // Take back to a position where it is MY turn again: on my turn that is
+      // the computer's reply + my move (2); while the computer is still
+      // thinking only my move (1). This also keeps Black games from being
+      // left on the computer's turn with nobody to move.
+      final bool myTurn = _game.state.turn == _player && !_aiThinking;
+      int movesToUndo = myTurn ? 2 : 1;
+      if (movesToUndo > _moveHistory.length) movesToUndo = _moveHistory.length;
+
+      // The computer is thinking: its answer to the cancelled search must not
+      // be played later as the answer to the new position.
+      if (_aiThinking) {
+        _ignoreNextBestMove = true;
+        _aiThinking = false;
+        _searchCancelled = true;
+        _stockfish?.stdin = UCICommands.stop;
+      }
 
       for (int i = 0; i < movesToUndo && _fenHistory.isNotEmpty; i++) {
         // Remove the last move from history
@@ -1488,15 +1478,6 @@ class GameProvider extends ChangeNotifier {
 
         // Update the game state
         _state = _game.squaresState(_player);
-      }
-
-      // Stop Stockfish thinking if it's in progress
-      if (_aiThinking) {
-        _aiThinking = false;
-        _searchCancelled = true;
-        if (_stockfish != null) {
-          _stockfish!.stdin = 'stop';
-        }
       }
 
       _undoCount++;
@@ -1850,13 +1831,7 @@ class GameProvider extends ChangeNotifier {
       config['skill'],
     );
 
-    // Set Depth limit
-    if (config['depth'] != null) {
-      _stockfish!.stdin = UCICommands.buildSetOption(
-        UCICommands.depth,
-        config['depth'],
-      );
-    }
+    // (Depth limits are sent with the "go" command; Stockfish has no "Depth" option.)
 
     // Set MultiPV for weaker levels (show multiple best moves)
     if (_gameLevel == 0) {
@@ -1978,7 +1953,10 @@ class GameProvider extends ChangeNotifier {
       // Check if it's AI's turn
       bool isAiTurn =
           _state.state == PlayState.theirTurn ||
-          (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
+          (_vsCPU &&
+              _player == Squares.black &&
+              _game.state.moveNumber == 1 &&
+              _game.state.turn != _player);
 
       if (isAiTurn && !_aiThinking) {
         _logger.i('AI is thinking...');
@@ -1995,7 +1973,10 @@ class GameProvider extends ChangeNotifier {
         final thinkingTime = config['time'] as int;
 
         // Send the go command with thinking time
-        _stockfish!.stdin = '${UCICommands.goMoveTime} $thinkingTime';
+        final depthLimit = config['depth'];
+        _stockfish!.stdin = depthLimit != null
+            ? 'go depth $depthLimit movetime $thinkingTime'
+            : '${UCICommands.goMoveTime} $thinkingTime';
       }
     } catch (e) {
       _logger.e('Error making Stockfish move: $e');
@@ -2041,9 +2022,11 @@ class GameProvider extends ChangeNotifier {
       // Always play at full strength for this — it's a move the player
       // explicitly asked the AI to make on their behalf, not the CPU
       // opponent's move (which is throttled by the selected difficulty).
-      _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.skillLevel, 20);
+      // The hint follows the selected computer level (same skill and thinking time).
+      final hintCfg = _getStockfishLevelConfig(_gameLevel);
+      _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.skillLevel, hintCfg['skill']);
       _stockfish!.stdin = UCICommands.buildSetOption(UCICommands.multiPV, 1);
-      _stockfish!.stdin = '${UCICommands.goMoveTime} 1500';
+      _stockfish!.stdin = '${UCICommands.goMoveTime} ${hintCfg['time']}';
     } catch (e) {
       _logger.e('Error requesting AI move for player: $e');
       _aiMoveRequestedForPlayer = false;
@@ -2085,10 +2068,18 @@ class GameProvider extends ChangeNotifier {
     {
       _logger.i('Stockfish output: $event');
 
+      if (_ignoreNextBestMove && event.contains(UCICommands.bestMove)) {
+        _ignoreNextBestMove = false;
+        return;
+      }
+
       // Check if it's AI's turn and not already thinking
       bool isAiTurn =
           _state.state == PlayState.theirTurn ||
-          (_vsCPU && _player == Squares.black && _game.state.moveNumber == 1);
+          (_vsCPU &&
+              _player == Squares.black &&
+              _game.state.moveNumber == 1 &&
+              _game.state.turn != _player);
 
       _logger.i('Is AI turn: $isAiTurn, AI thinking: $_aiThinking');
 
@@ -2698,7 +2689,11 @@ class GameProvider extends ChangeNotifier {
   }
 
   /// Waits for the game to become active (opponent joined)
-  Future<void> waitForGameToStart() async {
+  Completer<void>? _waitForStartCompleter;
+
+  Future<void> waitForGameToStart({
+    Duration timeout = const Duration(minutes: 5),
+  }) async {
     // If game is already active, return immediately
     if (_onlineGameRoom?.status == Constants.statusActive) {
       _logger.i('Game is already active, returning immediately');
@@ -2708,6 +2703,7 @@ class GameProvider extends ChangeNotifier {
     _logger.i('Waiting for game $_gameId to become active...');
 
     final completer = Completer<void>();
+    _waitForStartCompleter = completer;
 
     late final StreamSubscription startSub;
     late final StreamSubscription errorSub;
@@ -2725,7 +2721,7 @@ class GameProvider extends ChangeNotifier {
 
     try {
       await completer.future.timeout(
-        const Duration(minutes: 5), // 5 minute timeout
+        timeout,
         onTimeout: () {
           _logger.w('Timed out waiting for opponent to join');
 
@@ -2739,16 +2735,16 @@ class GameProvider extends ChangeNotifier {
           // the admin panel's stale-game cleanup.
           _gameSocketService.cancelMatchmaking();
 
-          throw TimeoutException(
-            'Timed out waiting for opponent',
-            const Duration(minutes: 5),
-          );
+          throw TimeoutException('Timed out waiting for opponent', timeout);
         },
       );
     } catch (e) {
       _logger.e('Error in waitForGameToStart: $e');
       rethrow;
     } finally {
+      if (identical(_waitForStartCompleter, completer)) {
+        _waitForStartCompleter = null;
+      }
       startSub.cancel();
       errorSub.cancel();
     }
@@ -2829,6 +2825,9 @@ class GameProvider extends ChangeNotifier {
       _searchKeepAliveTimer?.cancel();
       // Set flag to signal that search was cancelled
       _searchCancelled = true;
+      // Release anyone still awaiting waitForGameToStart (it would otherwise hang for the full timeout).
+      final pendingWait = _waitForStartCompleter;
+      if (pendingWait != null && !pendingWait.isCompleted) pendingWait.complete();
 
       _gameSocketService.cancelMatchmaking();
 

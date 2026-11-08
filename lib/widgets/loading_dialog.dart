@@ -14,6 +14,11 @@ class LoadingDialog {
   static late ValueNotifier<bool> _showOnlineCountNotifier;
   static late ValueNotifier<bool> _showCancelButtonNotifier;
   static VoidCallback? _onCancel;
+
+  /// Optional countdown (seconds left) drawn as a ring with the number inside the spinner.
+  /// Null = plain spinner. Reset automatically when the dialog is hidden.
+  static final ValueNotifier<int?> countdown = ValueNotifier<int?>(null);
+  static int countdownTotal = 30;
   static bool _isCancelButtonDelayActive =
       false; // Track if we're in delay period
 
@@ -120,7 +125,15 @@ class LoadingDialog {
                               const SizedBox(height: 16),
                             ],
                             // Loading spinner and message
-                            const CircularProgressIndicator.adaptive(),
+                            ValueListenableBuilder<int?>(
+                              valueListenable: countdown,
+                              builder: (context, left, _) {
+                                if (left == null) {
+                                  return const CircularProgressIndicator.adaptive();
+                                }
+                                return _SearchRing(left: left, total: countdownTotal);
+                              },
+                            ),
                             const SizedBox(height: 16),
                             AnimatedSwitcher(
                               duration: const Duration(milliseconds: 300),
@@ -133,15 +146,26 @@ class LoadingDialog {
                             // Cancel button if enabled
                             if (isCancelButtonVisible) ...[
                               const SizedBox(height: 20),
-                              TextButton(
+                              OutlinedButton.icon(
                                 onPressed: () {
                                   _onCancel?.call();
                                   hide(context);
                                 },
-                                style: TextButton.styleFrom(
+                                icon: const Icon(Icons.close, size: 18),
+                                style: OutlinedButton.styleFrom(
                                   foregroundColor: Colors.red,
+                                  side: BorderSide(
+                                    color: Colors.red.withValues(alpha: 0.5),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 28,
+                                    vertical: 12,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
                                 ),
-                                child: const Text('Cancel'),
+                                label: const Text('Cancel'),
                               ),
                             ],
                           ],
@@ -198,6 +222,7 @@ class LoadingDialog {
   static void hide(BuildContext context) {
     if (!_isShowing) return;
     _isShowing = false;
+    countdown.value = null;
     _isCancelButtonDelayActive = false;
     _onlineCountSubscription?.cancel();
     _onlineCountSubscription = null;
@@ -247,21 +272,138 @@ class _OnlinePlayersWidget extends StatelessWidget {
         }
 
         final count = snapshot.data ?? 0;
-        return Column(
-          children: [
-            Icon(
-              Icons.people,
-              size: 32,
-              color: count > 0 ? Colors.green : Colors.grey,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '$count players online',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-          ],
+        final color = count > 0 ? Colors.green : Colors.grey;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '$count players online',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
         );
       },
+    );
+  }
+}
+
+
+/// Pulsing countdown ring used while searching for an opponent.
+class _SearchRing extends StatefulWidget {
+  final int left;
+  final int total;
+  const _SearchRing({required this.left, required this.total});
+
+  @override
+  State<_SearchRing> createState() => _SearchRingState();
+}
+
+class _SearchRingState extends State<_SearchRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final urgent = widget.left <= 5;
+    final color = urgent ? Colors.orange : cs.primary;
+    return SizedBox(
+      width: 120,
+      height: 120,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Expanding radar-like wave
+          AnimatedBuilder(
+            animation: _pulse,
+            builder: (context, _) {
+              final t = _pulse.value;
+              return Container(
+                width: 84 + 36 * t,
+                height: 84 + 36 * t,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: color.withValues(alpha: 0.35 * (1 - t)),
+                    width: 3,
+                  ),
+                ),
+              );
+            },
+          ),
+          Container(
+            width: 84,
+            height: 84,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color.withValues(alpha: 0.08),
+            ),
+          ),
+          SizedBox(
+            width: 84,
+            height: 84,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(end: (widget.left / widget.total).clamp(0.0, 1.0)),
+              duration: const Duration(milliseconds: 900),
+              builder: (context, v, _) => CircularProgressIndicator(
+                value: v,
+                strokeWidth: 6,
+                strokeCap: StrokeCap.round,
+                color: color,
+                backgroundColor: color.withValues(alpha: 0.15),
+              ),
+            ),
+          ),
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${widget.left}',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: color,
+                  height: 1,
+                ),
+              ),
+              Text(
+                'sec',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: cs.onSurface.withValues(alpha: 0.55),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
