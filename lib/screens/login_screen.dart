@@ -33,6 +33,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
+    FocusManager.instance.primaryFocus?.unfocus(); // close the keyboard
     if (_isLoading) return; // Prevent multiple submissions
     if (_formKey.currentState!.validate()) {
       setState(() {
@@ -84,12 +85,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (value == null || value.isEmpty) {
       return 'Email cannot be empty';
     }
-    try {
-      _userService.isValidEmail(value);
-      return null;
-    } catch (e) {
-      return e.toString().replaceFirst('ArgumentError: ', '');
-    }
+    return _userService.isValidEmail(value);
   }
 
   String? _validatePassword(String? value) {
@@ -101,7 +97,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      child: Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -117,6 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Padding(
             padding: const EdgeInsets.all(24.0),
             child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               child: Form(
                 key: _formKey,
                 child: Column(
@@ -259,6 +259,7 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
@@ -24,7 +25,7 @@ class PuzzleService {
   final Map<String, PuzzleDifficulty> _difficultyById = {};
 
   PuzzleModel _puzzleFromBackendJson(Map<String, dynamic> json) {
-    final id = json['_id']?.toString() ?? '';
+    final id = (json['_id'] ?? json['id'])?.toString() ?? '';
     final theme = json['theme'] as String?;
     return PuzzleModel.fromJson({
       'id': id,
@@ -41,67 +42,204 @@ class PuzzleService {
     });
   }
 
-  /// Load all puzzles from the backend, with the bundled fallback puzzles
-  /// used only if the backend can't be reached (e.g. offline, or the VPS
-  /// isn't deployed yet) so puzzle mode never completely breaks.
+  // ---- Pagination -------------------------------------------------------
+  // The first request loads page 1; "Load More" asks for the following pages.
+  // Nothing is limited to the first 2000 puzzles any more: every page the
+  // server has can be loaded.
+  // Smaller pages: a 2000-puzzle page was slow enough to time out on mobile data,
+  // which silently sent users to the 10 bundled fallback puzzles.
+  int _pageSize = 500;
+  static const Duration _puzzleTimeout = Duration(seconds: 60);
+
+  /// The puzzle list out of the server answer, whatever shape it has
+  /// ({puzzles: [...]}, {data: {puzzles: [...]}}, {items: [...]}, ...).
+  List _extractPuzzles(Map<String, dynamic> result) {
+    for (final key in const ['puzzles', 'items', 'results', 'data']) {
+      final v = result[key];
+      if (v is List) return v;
+      if (v is Map) {
+        for (final inner in const ['puzzles', 'items', 'results']) {
+          if (v[inner] is List) return v[inner] as List;
+        }
+      }
+    }
+    return const [];
+  }
+  int _pagesLoaded = 0;
+  bool _hasMorePuzzles = false;
+  bool _loadingMore = false;
+  final Set<String> _loadedIds = {};
+
+  /// True while the server probably has more puzzles to load.
+  bool get hasMorePuzzles => _hasMorePuzzles;
+  bool get isLoadingMore => _loadingMore;
+
+  /// Works out whether another page exists. Uses the server's own hint
+  /// (`hasMore` / `total`) when it sends one, otherwise "the page was full".
+  bool _serverHasMore(Map<String, dynamic> result, int rawCount) {
+    final hasMore = result['hasMore'];
+    if (hasMore is bool) return hasMore;
+    final total = result['total'];
+    if (total is num) return _loadedIds.length < total.toInt();
+    // The server may cap the page size below ours: any non-empty page can be
+    // followed by another. A page with nothing new ends the list (see loadMorePuzzles).
+    return rawCount > 0;
+  }
+
+  /// Parses and validates a page of puzzles; invalid ones are skipped and
+  /// puzzles already loaded (same id) are never added twice.
+  List<PuzzleModel> _parsePage(List puzzlesJson) {
+    final List<PuzzleModel> valid = [];
+    int invalidCount = 0;
+    for (int i = 0; i < puzzlesJson.length; i++) {
+      try {
+        final puzzle = _puzzleFromBackendJson(Map<String, dynamic>.from(puzzlesJson[i]));
+        if (!_validatePuzzleData(puzzle)) {
+          invalidCount++;
+          _logger.w('Skipping invalid puzzle at index $i: ${puzzle.id}');
+          continue;
+        }
+        if (!_loadedIds.add(puzzle.id)) continue; // duplicate: already loaded
+        valid.add(puzzle);
+        _difficultyById[puzzle.id] = puzzle.difficulty;
+      } catch (e) {
+        invalidCount++;
+        _logger.w('Error parsing puzzle at index $i: $e');
+      }
+    }
+    if (invalidCount > 0) {
+      _logger.w('Skipped $invalidCount invalid puzzles out of ${puzzlesJson.length}');
+    }
+    return valid;
+  }
+
+  /// Load the first page of puzzles from the backend, with the bundled
+  /// fallback puzzles used only if the backend can't be reached (e.g. offline,
+  /// or the VPS isn't deployed yet) so puzzle mode never completely breaks.
+  /// More pages are loaded with [loadMorePuzzles].
   Future<List<PuzzleModel>> loadPuzzles() async {
     if (_cachedPuzzles != null) {
       return _cachedPuzzles!;
     }
+    // The server just failed: do not hammer it again for every difficulty list
+    // (each one calls this method). The Retry button resets this.
+    if (_offlinePuzzles != null &&
+        _lastFailAt != null &&
+        DateTime.now().difference(_lastFailAt!) < const Duration(seconds: 20)) {
+      return _offlinePuzzles!;
+    }
 
-    try {
-      _logger.i('Loading puzzles from backend');
-      final result = await _api.get('/puzzles', query: {'limit': 2000});
-      final puzzlesJson = result['puzzles'] as List;
-
-      if (puzzlesJson.isEmpty) {
-        _logger.w('No puzzles returned by backend, using fallback puzzles');
-        // Not cached: the next load must retry the backend.
-        return FallbackPuzzles.getFallbackPuzzles();
-      }
-
-      final List<PuzzleModel> validPuzzles = [];
-      int invalidCount = 0;
-
-      for (int i = 0; i < puzzlesJson.length; i++) {
-        try {
-          final puzzle = _puzzleFromBackendJson(Map<String, dynamic>.from(puzzlesJson[i]));
-          if (_validatePuzzleData(puzzle)) {
-            validPuzzles.add(puzzle);
-            _difficultyById[puzzle.id] = puzzle.difficulty;
-          } else {
-            invalidCount++;
-            _logger.w('Skipping invalid puzzle at index $i: ${puzzle.id}');
-          }
-        } catch (e) {
-          invalidCount++;
-          _logger.w('Error parsing puzzle at index $i: $e');
+    // Try the normal page size first, then a smaller one (a server that caps the
+    // page size, or a slow connection, may refuse / time out on the big one).
+    // Different servers page differently (the first request used to be just
+    // ?limit=N), so a few query shapes are tried until one returns puzzles.
+    final attempts = <Map<String, dynamic>>[
+      {'limit': 500},
+      {'limit': 100},
+      {'limit': 100, 'page': 1},
+      <String, dynamic>{},
+    ];
+    for (var i = 0; i < attempts.length; i++) {
+      final query = attempts[i];
+      final size = (query['limit'] as int?) ?? 500;
+      try {
+        _logger.i('Loading puzzles from backend (query $query)');
+        _loadedIds.clear();
+        _pageSize = size;
+        final result = await _api.get(
+          '/puzzles',
+          query: query.isEmpty ? null : query,
+          timeout: i == 0 ? _puzzleTimeout : const Duration(seconds: 30),
+        );
+        final puzzlesJson = _extractPuzzles(result);
+        if (puzzlesJson.isEmpty) {
+          lastLoadError =
+              'The server sent an empty puzzle list (answer keys: ${result.keys.join(', ')}).';
+          continue;
         }
+        final validPuzzles = _parsePage(puzzlesJson);
+        if (validPuzzles.isEmpty) {
+          lastLoadError = 'The server sent puzzles in an unknown format.';
+          continue;
+        }
+        _cachedPuzzles = validPuzzles;
+        _pagesLoaded = 1;
+        _hasMorePuzzles = _serverHasMore(Map<String, dynamic>.from(result), puzzlesJson.length);
+        usingOfflinePuzzles = false;
+        lastLoadError = null;
+        _offlinePuzzles = null;
+        _logger.i('Successfully loaded ${_cachedPuzzles!.length} valid puzzles');
+        return _cachedPuzzles!;
+      } on ApiException catch (e) {
+        lastLoadError = 'Server answered ${e.statusCode}: ${e.message}';
+        _logger.e('Error loading puzzles from backend: $e');
+      } catch (e) {
+        lastLoadError = 'Could not reach the server ($e).';
+        _logger.e('Error loading puzzles from backend: $e');
       }
+    }
 
-      if (validPuzzles.isEmpty) {
-        _logger.w(
-          'No valid puzzles found from backend, using fallback puzzles',
-        );
-        // Not cached: the next load must retry the backend.
-        return FallbackPuzzles.getFallbackPuzzles();
+    // Server failed: use the puzzles bundled inside the app (hundreds), and only
+    // the tiny built-in list if even that fails. Not cached, so Retry asks again.
+    _loadedIds.clear();
+    _hasMorePuzzles = false;
+    usingOfflinePuzzles = true;
+    _lastFailAt = DateTime.now();
+    _offlinePuzzles = await _loadBundledPuzzles();
+    return _offlinePuzzles!;
+  }
+
+  /// Puzzles from assets/puzzles/puzzles.json (same format as the server's).
+  Future<List<PuzzleModel>> _loadBundledPuzzles() async {
+    try {
+      final raw = await rootBundle.loadString('assets/puzzles/puzzles.json');
+      final decoded = jsonDecode(raw);
+      final list = decoded is Map ? decoded['puzzles'] : decoded;
+      if (list is List) {
+        final valid = _parsePage(list);
+        if (valid.isNotEmpty) return valid;
       }
-
-      if (invalidCount > 0) {
-        _logger.w(
-          'Skipped $invalidCount invalid puzzles out of ${puzzlesJson.length}',
-        );
-      }
-
-      _cachedPuzzles = validPuzzles;
-      _logger.i('Successfully loaded ${_cachedPuzzles!.length} valid puzzles');
-      return _cachedPuzzles!;
     } catch (e) {
-      _logger.e(
-        'Error loading puzzles from backend: $e, using fallback puzzles',
-      );
-      // Not cached: the next load must retry the backend.
-      return FallbackPuzzles.getFallbackPuzzles();
+      _logger.e('Could not read the bundled puzzles: $e');
+    }
+    return FallbackPuzzles.getFallbackPuzzles();
+  }
+
+  /// Set when the server could not be used; shown to the user with a Retry.
+  bool usingOfflinePuzzles = false;
+  String? lastLoadError;
+  List<PuzzleModel>? _offlinePuzzles;
+  DateTime? _lastFailAt;
+
+  /// Forgets a failed attempt so the next load asks the server again.
+  void resetOfflineState() {
+    _offlinePuzzles = null;
+    _lastFailAt = null;
+    usingOfflinePuzzles = false;
+  }
+
+  /// Loads the next page and appends it. Returns how many NEW puzzles were
+  /// added (0 when there is nothing more). Throws on a server/network error,
+  /// leaving everything already loaded untouched so the user can try again.
+  Future<int> loadMorePuzzles() async {
+    final cached = _cachedPuzzles;
+    if (cached == null || !_hasMorePuzzles || _loadingMore) return 0;
+    _loadingMore = true;
+    try {
+      final nextPage = _pagesLoaded + 1;
+      final result = await _api.get('/puzzles', query: {'limit': _pageSize, 'page': nextPage, 'skip': cached.length, 'offset': cached.length}, timeout: _puzzleTimeout);
+      final puzzlesJson = _extractPuzzles(result);
+      final added = _parsePage(puzzlesJson);
+      cached.addAll(added);
+      _pagesLoaded = nextPage;
+      // An empty page, or a page with nothing new (a server that ignores the
+      // page number sends the same puzzles again), means we reached the end.
+      _hasMorePuzzles = added.isNotEmpty &&
+          _serverHasMore(Map<String, dynamic>.from(result), puzzlesJson.length);
+      _logger.i('Loaded page $nextPage: ${added.length} new puzzles (total ${cached.length})');
+      return added.length;
+    } finally {
+      _loadingMore = false;
     }
   }
 
@@ -385,6 +523,10 @@ class PuzzleService {
         orElse: () => const {},
       );
       if (match.isNotEmpty) {
+        final localDone = await _localProgress(userId, puzzleId);
+        if (localDone != null && localDone.completed && match['solved'] != true) {
+          return localDone;
+        }
         return PuzzleProgress(
           userId: userId,
           puzzleId: puzzleId,
@@ -415,6 +557,17 @@ class PuzzleService {
       _logger.e('Error reading cached puzzle progress for $userId/$puzzleId: $e');
     }
     return null;
+  }
+
+  Future<PuzzleProgress?> _localProgress(String userId, String puzzleId) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_puzzleProgressPrefix${userId}_$puzzleId');
+      if (raw == null) return null;
+      return PuzzleProgress.fromJson(json.decode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Get completion statistics by difficulty level for a user, from the backend.
@@ -466,12 +619,37 @@ class PuzzleService {
 
   /// Get all puzzle progress for a user, from the backend.
   Future<List<PuzzleProgress>> getAllUserProgress(String userId) async {
+    final Map<String, PuzzleProgress> byId = {};
+
+    // 1) Local copy first: it works offline and for guests.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final prefix = '$_puzzleProgressPrefix${userId}_';
+      for (final key in prefs.getKeys().where((k) => k.startsWith(prefix))) {
+        try {
+          final raw = prefs.getString(key);
+          if (raw == null) continue;
+          final p = PuzzleProgress.fromJson(
+            json.decode(raw) as Map<String, dynamic>,
+          );
+          final known = _difficultyById[p.puzzleId];
+          byId[p.puzzleId] = known != null ? p.copyWith(difficulty: known) : p;
+        } catch (e) {
+          _logger.w('Skipping unreadable cached progress $key: $e');
+        }
+      }
+    } catch (e) {
+      _logger.e('Error reading cached progress for $userId: $e');
+    }
+
+    // 2) Backend on top. A solved puzzle stays solved if either side says so.
     try {
       final result = await _api.get('/puzzles/progress/all');
       final records = (result['progress'] as List).cast<Map<String, dynamic>>();
-      final progressList = records.map((r) {
+      for (final r in records) {
         final puzzleId = r['puzzleId']?.toString() ?? '';
-        return PuzzleProgress(
+        if (puzzleId.isEmpty) continue;
+        final remote = PuzzleProgress(
           userId: userId,
           puzzleId: puzzleId,
           completed: r['solved'] ?? false,
@@ -484,16 +662,16 @@ class PuzzleService {
           updatedAt: r['updatedAt'] != null ? DateTime.parse(r['updatedAt']) : DateTime.now(),
           needsSync: false,
         );
-      }).toList();
-
-      _logger.i(
-        'Retrieved ${progressList.length} progress records for user $userId',
-      );
-      return progressList;
+        final local = byId[puzzleId];
+        if (local != null && local.completed && !remote.completed) continue;
+        byId[puzzleId] = remote;
+      }
     } catch (e) {
-      _logger.e('Error getting all user progress for $userId: $e');
-      return [];
+      _logger.e('Error getting all user progress for $userId (using local copy): $e');
     }
+
+    _logger.i('Retrieved ${byId.length} progress records for user $userId');
+    return byId.values.toList();
   }
 
   /// Clear all puzzle progress for a user (useful for testing or reset).

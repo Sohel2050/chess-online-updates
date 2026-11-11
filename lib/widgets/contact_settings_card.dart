@@ -14,7 +14,7 @@ class _ContactSettingsCardState extends State<ContactSettingsCard> {
   final _admin = AdminService();
   final _emailCtrl = TextEditingController();
   final _waCtrl = TextEditingController();
-  bool _waEnabled = false;
+  bool _waEnabled = true;
   bool _loaded = false;
   bool _saving = false;
 
@@ -52,7 +52,7 @@ class _ContactSettingsCardState extends State<ContactSettingsCard> {
     if (email.isNotEmpty && !_validEmail(email)) {
       error = 'Enter a valid email address';
     } else if (_waEnabled && digits.length < 8) {
-      error = 'Enter the WhatsApp number with country code (e.g. 8801XXXXXXXXX)';
+      error = 'Enter the WhatsApp number with country code (e.g. +15059103477)';
     }
     if (error != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
@@ -91,15 +91,15 @@ class _ContactSettingsCardState extends State<ContactSettingsCard> {
                     keyboardType: TextInputType.emailAddress,
                     decoration: const InputDecoration(
                       labelText: 'Support email',
-                      helperText: 'Users tap it to open their mail app (mailto). Leave empty to hide.',
+                      helperText: 'Users tap it to open their mail app (mailto). Empty = default support@albonik.com.',
                       border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 16),
                   SwitchListTile.adaptive(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('WhatsApp contact'),
-                    subtitle: const Text('Show or hide the WhatsApp option in Contact Us'),
+                    title: const Text('Live chat (WhatsApp)'),
+                    subtitle: const Text('Show or hide the Live chat card in Contact Us'),
                     value: _waEnabled,
                     onChanged: (v) => setState(() => _waEnabled = v),
                   ),
@@ -108,8 +108,8 @@ class _ContactSettingsCardState extends State<ContactSettingsCard> {
                     enabled: _waEnabled,
                     keyboardType: TextInputType.phone,
                     decoration: const InputDecoration(
-                      labelText: 'WhatsApp number',
-                      helperText: 'With country code, e.g. 8801XXXXXXXXX',
+                      labelText: 'Live chat WhatsApp number',
+                      helperText: 'With country code, e.g. +15059103477',
                       border: OutlineInputBorder(),
                     ),
                   ),

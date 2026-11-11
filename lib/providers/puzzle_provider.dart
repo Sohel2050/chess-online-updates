@@ -220,8 +220,43 @@ class PuzzleProvider extends ChangeNotifier {
     }
   }
 
+  bool _isLoadingMore = false;
+
+  /// True when the server could not be used and the bundled puzzles are shown.
+  bool get usingOfflinePuzzles => _puzzleService.usingOfflinePuzzles;
+  String? get puzzleLoadError => _puzzleService.lastLoadError;
+
+  /// True while the server probably has more puzzles (shows "Load More").
+  bool get hasMorePuzzles => _puzzleService.hasMorePuzzles;
+  bool get isLoadingMorePuzzles => _isLoadingMore;
+
+  /// Loads the next page of puzzles and adds them to the difficulty lists
+  /// (never duplicating one). Returns the number of new puzzles, or throws if
+  /// the server could not be reached; what is already loaded stays as it is.
+  Future<int> loadMorePuzzles() async {
+    if (_isLoadingMore) return 0;
+    _isLoadingMore = true;
+    notifyListeners();
+    try {
+      final added = await _puzzleService
+          .loadMorePuzzles()
+          .timeout(const Duration(seconds: 30));
+      if (added > 0) {
+        for (final difficulty in PuzzleDifficulty.values) {
+          _puzzlesByDifficulty[difficulty] =
+              await _puzzleService.getPuzzlesByDifficulty(difficulty);
+        }
+      }
+      return added;
+    } finally {
+      _isLoadingMore = false;
+      notifyListeners();
+    }
+  }
+
   /// Retry initialization
   Future<void> retryInitialization() async {
+    _puzzleService.resetOfflineState();
     _hasInitialized = false;
     await initialize(userId: _currentUserId);
   }

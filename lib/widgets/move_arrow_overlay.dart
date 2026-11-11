@@ -75,3 +75,124 @@ class MoveArrowPainter extends CustomPainter {
   bool shouldRepaint(covariant MoveArrowPainter old) =>
       old.uci != uci || old.flipped != flipped || old.color != color;
 }
+
+
+/// Hint arrow with a short intro: a small ripple (wave) pulses on the piece's
+/// square first, then the arrow grows out of it. Restarts whenever [uci] changes.
+class AnimatedMoveArrow extends StatefulWidget {
+  final String? uci;
+  final bool flipped;
+  final Color color;
+
+  const AnimatedMoveArrow({
+    super.key,
+    required this.uci,
+    required this.flipped,
+    this.color = const Color(0xCCFFB300),
+  });
+
+  @override
+  State<AnimatedMoveArrow> createState() => _AnimatedMoveArrowState();
+}
+
+class _AnimatedMoveArrowState extends State<AnimatedMoveArrow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..forward();
+  }
+
+  @override
+  void didUpdateWidget(covariant AnimatedMoveArrow old) {
+    super.didUpdateWidget(old);
+    if (old.uci != widget.uci) _c.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, _) {
+        final t = _c.value;
+        // 0..0.55 ripple on the from-square, 0.45..1 arrow fades/grows in.
+        final arrowT = ((t - 0.45) / 0.55).clamp(0.0, 1.0);
+        return CustomPaint(
+          painter: _HintIntroPainter(
+            uci: widget.uci,
+            flipped: widget.flipped,
+            color: widget.color,
+            rippleT: (t / 0.55).clamp(0.0, 1.0),
+            arrowT: Curves.easeOut.transform(arrowT),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HintIntroPainter extends CustomPainter {
+  final String? uci;
+  final bool flipped;
+  final Color color;
+  final double rippleT;
+  final double arrowT;
+
+  _HintIntroPainter({
+    required this.uci,
+    required this.flipped,
+    required this.color,
+    required this.rippleT,
+    required this.arrowT,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final move = ArrowGeometry.parseUci(uci);
+    if (move == null) return;
+    final side = math.min(size.width, size.height);
+    final cell = side / 8;
+    final from = ArrowGeometry.squareCenter(move.$1, side, flipped: flipped);
+
+    if (rippleT < 1) {
+      for (var i = 0; i < 2; i++) {
+        final p = (rippleT - i * 0.25).clamp(0.0, 1.0);
+        if (p <= 0) continue;
+        final paint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = cell * 0.07
+          ..color = color.withValues(alpha: (1 - p) * 0.9);
+        canvas.drawCircle(from, cell * (0.25 + 0.6 * p), paint);
+      }
+    }
+
+    if (arrowT > 0) {
+      canvas.saveLayer(
+        Offset.zero & size,
+        Paint()..color = Color.fromRGBO(255, 255, 255, arrowT),
+      );
+      MoveArrowPainter(uci: uci, flipped: flipped, color: color)
+          .paint(canvas, size);
+      canvas.restore();
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _HintIntroPainter old) =>
+      old.uci != uci ||
+      old.flipped != flipped ||
+      old.rippleT != rippleT ||
+      old.arrowT != arrowT ||
+      old.color != color;
+}

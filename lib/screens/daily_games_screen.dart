@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/game_socket_service.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/screens/daily_game_screen.dart';
 import 'package:flutter_chess_app/services/api_client.dart';
@@ -8,7 +11,9 @@ import 'package:flutter_chess_app/services/friend_service.dart';
 /// "Daily games": slow games against friends (1-7 days per move), unrated. Works with the app closed (push on every move).
 class DailyGamesScreen extends StatefulWidget {
   final ChessUser user;
-  const DailyGamesScreen({super.key, required this.user});
+  /// Inside the Friends tab: no app bar of its own.
+  final bool embedded;
+  const DailyGamesScreen({super.key, required this.user, this.embedded = false});
 
   @override
   State<DailyGamesScreen> createState() => _DailyGamesScreenState();
@@ -20,10 +25,22 @@ class _DailyGamesScreenState extends State<DailyGamesScreen> {
   bool _loading = true;
   String? _error;
 
+  StreamSubscription<Map<String, dynamic>>? _liveSub;
+
   @override
   void initState() {
     super.initState();
     _load();
+    // New challenge / opponent moved / game ended -> refresh the list live.
+    _liveSub = GameSocketService.instance.onDailyUpdate.listen((_) {
+      if (mounted) _load();
+    });
+  }
+
+  @override
+  void dispose() {
+    _liveSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -125,9 +142,12 @@ class _DailyGamesScreenState extends State<DailyGamesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Daily games'), actions: [
-        IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
-      ]),
+      backgroundColor: widget.embedded ? Colors.transparent : null,
+      appBar: widget.embedded
+          ? null
+          : AppBar(title: const Text('Daily games'), actions: [
+              IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+            ]),
       floatingActionButton: widget.user.isGuest
           ? null
           : FloatingActionButton.extended(onPressed: _newChallenge, icon: const Icon(Icons.add), label: const Text('Challenge a friend')),

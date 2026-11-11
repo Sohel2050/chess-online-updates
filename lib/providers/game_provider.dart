@@ -228,6 +228,11 @@ class GameProvider extends ChangeNotifier {
   bool _takebackReceived = false; // The opponent asked to take back a move
   bool _takebackRejected = false; // Our takeback request was declined
   bool _rematchOfferSent = false; // Track if current user sent a rematch offer
+  // The server refused our rematch offer (e.g. aborted game): message for the dialog.
+  String? _rematchError;
+  StreamSubscription<String>? _rematchErrorSub;
+  String? get rematchError => _rematchError;
+  void clearRematchError() => _rematchError = null;
   bool _rematchPending =
       false; // Track if rematch is accepted and ready to start
   bool _searchCancelled =
@@ -369,15 +374,6 @@ class GameProvider extends ChangeNotifier {
   String? get _myOnlineId => _onlineGameRoom == null
       ? null
       : (_isHost ? _onlineGameRoom!.player1Id : _onlineGameRoom!.player2Id);
-
-  /// Online game that is still running and has seen fewer than 2 plies: abort is possible (no result, no rating change).
-  bool get canAbortOnline =>
-      _isOnlineGame &&
-      !_localMultiplayer &&
-      _onlineGameRoom != null &&
-      _onlineGameRoom!.status == Constants.statusActive &&
-      _gameResultNotifier.value == null &&
-      _onlineGameRoom!.moves.length < 2;
 
   /// True when we have made a move that could be taken back and no request is open.
   bool get canOfferTakeback {
@@ -643,12 +639,6 @@ class GameProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Aborts an online game before it really started. The server decides; the result arrives as a room update.
-  Future<void> abortOnlineGame() async {
-    if (!canAbortOnline) return;
-    _gameSocketService.abortGame(_onlineGameRoom!.gameId);
-  }
-
   /// Clears the local draw-offer-rejection flag. There's no corresponding
   /// server state to clean up anymore — `drawOfferStatus` on the room just
   /// gets overwritten next time a draw is offered.
@@ -677,6 +667,19 @@ class GameProvider extends ChangeNotifier {
 
     try {
       _rematchOfferSent = true;
+      _rematchError = null;
+      // If the server refuses the offer it answers with an 'error' event. Without this
+      // the button stayed on "Rematch Requested" forever and nobody got the offer.
+      _rematchErrorSub?.cancel();
+      final errSub = _gameSocketService.onError.listen((message) {
+        if (!_rematchOfferSent) return;
+        _rematchOfferSent = false;
+        _rematchError = message.isEmpty ? 'Rematch is not available for this game' : message;
+        _rematchErrorSub?.cancel();
+        notifyListeners();
+      });
+      _rematchErrorSub = errSub;
+      Future.delayed(const Duration(seconds: 8), errSub.cancel);
       _gameSocketService.offerRematch(_onlineGameRoom!.gameId);
       _logger.i('Rematch offer initiated by $offeringPlayerId');
       notifyListeners();
@@ -879,6 +882,7 @@ class GameProvider extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _rematchErrorSub?.cancel();
     _searchKeepAliveTimer?.cancel();
     _coachClearTimer?.cancel();
     disposeStockfish();
@@ -997,6 +1001,8 @@ class GameProvider extends ChangeNotifier {
     _gameOverProcessed = false;
     _rematchPending = false;
     _rematchOfferSent = false;
+    _rematchError = null;
+    _rematchErrorSub?.cancel();
     _drawOfferReceived = false;
     _drawOfferRejected = false;
     _stopTimers();
@@ -1013,6 +1019,7 @@ class GameProvider extends ChangeNotifier {
     final replacesPreviousGame =
         _onlineGameRoom != null && _onlineGameRoom!.gameId != room.gameId;
     _resetPerGameState();
+    _pendingInviteId = null; // the invite was accepted
     if (replacesPreviousGame) _newGameCounter++;
     _onlineGameRoom = room;
     _isOpponentOnline = true; // both players were just matched; resume/rejoin will correct this
@@ -1435,6 +1442,13 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
+  /// Puts the board back to my colour (called whenever a game ends, on every path).
+  void resetBoardFlip() {
+    if (!_flipBoard) return;
+    _flipBoard = false;
+    notifyListeners();
+  }
+
   // Flip the board
   void flipTheBoard() {
     _flipBoard = !_flipBoard;
@@ -1523,6 +1537,7 @@ class GameProvider extends ChangeNotifier {
   void checkGameOver({String? userId}) {
     if (isGameOver && !_gameOverProcessed) {
       _gameOverProcessed = true; // Set flag to prevent multiple processing
+      _flipBoard = false; // a manual flip only lasts for the game it was made in
       _stopTimers();
       if (_gameResultNotifier.value == null) {
         _gameResultNotifier.value = _game.result;
@@ -1596,6 +1611,13 @@ class GameProvider extends ChangeNotifier {
 
   // Make squares move
   Future<bool> makeSquaresMove(Move move, {String userId = ''}) async {
+    // Once the game is over (checkmate, resignation, TIMEOUT...) no move may be
+    // played. A timeout only sets the result notifier (the board itself is not
+    // "game over"), so check the combined flag.
+    if (isGameOver) {
+      _logger.w('Move ignored: the game is already over.');
+      return false;
+    }
     // In online games, ensure it's the player's turn to move.
     if (_isOnlineGame) {
       final isOurTurn = _game.state.turn == _player;
@@ -2193,6 +2215,14 @@ class GameProvider extends ChangeNotifier {
     // Reset cancellation flag for new search
     _searchCancelled = false;
 
+    // A finished game's room must not survive into a NEW search: with the old
+    // room still "active", waitForGameToStart returned at once and the old
+    // position was shown again.
+    _onlineGameRoom = null;
+    _gameId = '';
+    _isHost = false;
+    _resetPerGameState();
+
     setLoading(true);
     setIsOnlineGame(true); // Set online game mode
 
@@ -2268,6 +2298,12 @@ class GameProvider extends ChangeNotifier {
     bool fromChat = false,
     bool trainingMode = false,
   }) async {
+    _searchCancelled = false;
+    // Drop any finished game's room: if it is still marked active, waitForGameToStart()
+    // returns at once and the game screen opens right after the invite is sent.
+    _onlineGameRoom = null;
+    _gameId = '';
+    _resetPerGameState();
     setLoading(true);
     setIsOnlineGame(true); // Set online game mode
 
@@ -2300,11 +2336,16 @@ class GameProvider extends ChangeNotifier {
       return;
     }
 
+    _pendingInviteId = room.gameId;
     _gameSocketService.rejoinGame(room.gameId);
 
     setLoading(false);
     notifyListeners();
   }
+
+  /// Server's reason when the last joinPrivateGameRoom() failed (null if unknown / succeeded).
+  String? _lastJoinError;
+  String? get lastJoinError => _lastJoinError;
 
   Future<bool> joinPrivateGameRoom({
     required String userId,
@@ -2316,6 +2357,7 @@ class GameProvider extends ChangeNotifier {
     required String roomCode,
   }) async {
     // Set loading
+    _lastJoinError = null;
     setLoading(true);
     setIsOnlineGame(true);
     setTimeControl(gameMode);
@@ -2349,6 +2391,7 @@ class GameProvider extends ChangeNotifier {
       setLoading(false);
       if (error != null) {
         _logger.w('Failed to join private room $roomCode: $error');
+        _lastJoinError = error;
         return false;
       }
       return true;
@@ -2371,6 +2414,18 @@ class GameProvider extends ChangeNotifier {
     }
   }
 
+  /// True only when [room] is really the START of a rematch: the room is active,
+  /// no rematch offer is pending, and the move list was reset (empty or shorter
+  /// than what we already played). A late move from the opponent after a
+  /// timeout has MORE moves than we have, so it must never count as a rematch
+  /// (it used to restart the finished game).
+  bool _isGenuineRematchStart(GameRoom room) {
+    if (room.status != Constants.statusActive || room.rematchOfferedBy != null) {
+      return false;
+    }
+    return room.moves.isEmpty || room.moves.length < _moveHistory.length;
+  }
+
   /// Handles updates received from the online game room stream.
   void onOnlineGameRoomUpdate(GameRoom updatedRoom) {
     // Let any external listeners (e.g. game_screen.dart's opponent-online
@@ -2386,9 +2441,7 @@ class GameProvider extends ChangeNotifier {
       final rematchOfferCleared =
           _onlineGameRoom?.rematchOfferedBy != null &&
           updatedRoom.rematchOfferedBy == null;
-      final rematchBeingAccepted =
-          updatedRoom.status == Constants.statusActive &&
-          updatedRoom.rematchOfferedBy == null;
+      final rematchBeingAccepted = _isGenuineRematchStart(updatedRoom);
       final hasDrawRejectionChange =
           (_onlineGameRoom?.drawOfferStatus != updatedRoom.drawOfferStatus) &&
           updatedRoom.drawOfferStatus == Constants.drawOfferStatusRejected;
@@ -2432,7 +2485,13 @@ class GameProvider extends ChangeNotifier {
     final previousTakebackStatus = _onlineGameRoom?.takebackStatus;
     final previousMoveCount = _onlineGameRoom?.moves.length ?? 0;
     final previousStatus = _onlineGameRoom?.status;
-    _onlineGameRoom = updatedRoom;
+    // Training mode is agreed once, when the game starts. Later server updates
+    // (moves, clock, draw offers...) may not repeat the flag; without this the
+    // training badge and engine warnings switched off after the first update.
+    final wasTraining = _onlineGameRoom?.trainingMode ?? false;
+    _onlineGameRoom = (wasTraining && !updatedRoom.trainingMode)
+        ? updatedRoom.copyWith(trainingMode: true)
+        : updatedRoom;
     _gameId = updatedRoom.gameId;
 
     // Take the server's clock values only when a move was made or the game
@@ -2469,9 +2528,7 @@ class GameProvider extends ChangeNotifier {
     }
 
     // Detect rematch acceptance: game was over and now it's active
-    if (wasGameOver &&
-        updatedRoom.status == Constants.statusActive &&
-        updatedRoom.rematchOfferedBy == null) {
+    if (wasGameOver && _isGenuineRematchStart(updatedRoom)) {
       _logger.i(
         'REMATCH DEBUG: Rematch detected - game was over: $wasGameOver, status: ${updatedRoom.status}, rematchOfferedBy: ${updatedRoom.rematchOfferedBy}',
       );
@@ -2707,6 +2764,13 @@ class GameProvider extends ChangeNotifier {
 
     late final StreamSubscription startSub;
     late final StreamSubscription errorSub;
+    late final StreamSubscription declineSub;
+
+    declineSub = _gameSocketService.onGameInviteDeclined.listen((data) {
+      final id = data['gameId']?.toString();
+      if (id != null && _gameId.isNotEmpty && id != _gameId) return;
+      if (!completer.isCompleted) completer.completeError(InviteDeclinedException());
+    });
 
     startSub = _gameSocketService.onGameStart.listen((_) {
       // `_applyNewOnlineGameRoom` (wired in `_initGameSocketListeners`) has
@@ -2747,6 +2811,7 @@ class GameProvider extends ChangeNotifier {
       }
       startSub.cancel();
       errorSub.cancel();
+      declineSub.cancel();
     }
   }
 
@@ -2820,7 +2885,21 @@ class GameProvider extends ChangeNotifier {
     });
   }
 
+  /// gameId of the friend invite we sent and nobody has joined yet.
+  String? _pendingInviteId;
+
+  /// True when the user pressed Cancel on the search / invite dialog.
+  bool get searchCancelled => _searchCancelled;
+
   Future<void> cancelOnlineGameSearch({bool isFriend = false}) async {
+    // A friend invite that nobody joined: remove it on the server too, so it disappears
+    // from the friend's invite list (best effort, never blocks the cancel).
+    final abandonedInviteId = (isFriend && _isHost && _onlineGameRoom?.status != Constants.statusActive)
+        ? (_onlineGameRoom?.gameId.isNotEmpty == true ? _onlineGameRoom!.gameId : _pendingInviteId)
+        : null;
+    if (abandonedInviteId != null && abandonedInviteId.isNotEmpty) {
+      unawaited(GameInviteService().cancelInvite(abandonedInviteId));
+    }
     try {
       _searchKeepAliveTimer?.cancel();
       // Set flag to signal that search was cancelled
@@ -2837,6 +2916,7 @@ class GameProvider extends ChangeNotifier {
       // harmless since matchmaking uses its own separate in-memory queue.
 
       // Reset game state
+      _pendingInviteId = null;
       _onlineGameRoom = null;
       _gameId = '';
       _isHost = false;
@@ -3057,4 +3137,10 @@ class GameProvider extends ChangeNotifier {
       _logger.e('Error deleting chat messages: $e');
     }
   }
+}
+
+/// Thrown by [GameProvider.waitForGameToStart] when the invited friend declines.
+class InviteDeclinedException implements Exception {
+  @override
+  String toString() => 'Invite declined';
 }

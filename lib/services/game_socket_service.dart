@@ -36,13 +36,24 @@ class GameSocketService {
   final _errorController = StreamController<String>.broadcast();
   final _chatMessageController = StreamController<Map<String, dynamic>>.broadcast();
   final _friendEventController = StreamController<Map<String, dynamic>>.broadcast();
+  final _dailyUpdateController = StreamController<Map<String, dynamic>>.broadcast();
   final _clubEventController = StreamController<Map<String, dynamic>>.broadcast();
   final _liveStatsController = StreamController<Map<String, dynamic>>.broadcast();
   final Map<String, int> _statsSubs = {}; // watched mode ('' = all modes) -> how many widgets watch it
   final _chatTypingController = StreamController<Map<String, dynamic>>.broadcast();
   final _gameInviteController = StreamController<Map<String, dynamic>>.broadcast();
+  final _gameInviteDeclinedController = StreamController<Map<String, dynamic>>.broadcast();
+  final _gameInviteCancelledController = StreamController<Map<String, dynamic>>.broadcast();
+  // Live needs the opponent's agreement: request / accepted / declined / cancelled (payload has gameId).
+  final _liveRequestController = StreamController<Map<String, dynamic>>.broadcast();
+  final _liveAnswerController = StreamController<Map<String, dynamic>>.broadcast(); // adds `accepted: bool`
+  final _liveCancelledController = StreamController<Map<String, dynamic>>.broadcast();
   final _reactionController = StreamController<Map<String, dynamic>>.broadcast();
   final _spectatorCountController = StreamController<Map<String, dynamic>>.broadcast();
+  final Map<String, int> _lastSpectatorCount = {};
+
+  /// Latest known number of viewers of [gameId] (0 if unknown).
+  int lastSpectatorCount(String gameId) => _lastSpectatorCount[gameId] ?? 0;
   final _spectateEndedController = StreamController<Map<String, dynamic>>.broadcast();
 
   /// An emoji reaction was sent in a game you are in or watching — payload:
@@ -135,9 +146,28 @@ class GameSocketService {
   /// `{ byUserId }` for one of your requests being accepted.
   Stream<Map<String, dynamic>> get onFriendEvent => _friendEventController.stream;
 
+  /// A daily (correspondence) game changed on the server: new move, draw offer, resign, result...
+  /// Payload: {gameId: "..."}.
+  Stream<Map<String, dynamic>> get onDailyUpdate => _dailyUpdateController.stream;
+
   /// Pushed the instant a friend sends you a private-game invite
   /// (payload: `{ room }`).
   Stream<Map<String, dynamic>> get onGameInviteReceived => _gameInviteController.stream;
+
+  /// Pushed to the invited friend when the sender cancelled (or replaced) the invite.
+  Stream<Map<String, dynamic>> get onGameInviteCancelled => _gameInviteCancelledController.stream;
+
+  /// Pushed to the host when the invited friend declines the invite.
+  Stream<Map<String, dynamic>> get onGameInviteDeclined => _gameInviteDeclinedController.stream;
+
+  /// The opponent wants this game Live: `{ gameId, fromUserId, fromName, kind }`. Answer with [respondToLive].
+  Stream<Map<String, dynamic>> get onLiveRequest => _liveRequestController.stream;
+
+  /// The opponent answered my Live request: `{ gameId, byName, accepted }`.
+  Stream<Map<String, dynamic>> get onLiveAnswer => _liveAnswerController.stream;
+
+  /// The opponent withdrew their Live request.
+  Stream<Map<String, dynamic>> get onLiveRequestCancelled => _liveCancelledController.stream;
 
   bool get isConnected => _socket?.connected ?? false;
 
@@ -215,12 +245,29 @@ class GameSocketService {
     socket.on('club:message', (data) => _clubEventController.add({...Map<String, dynamic>.from(data), 'event': 'message'}));
     socket.on('club:message_deleted', (data) => _clubEventController.add({...Map<String, dynamic>.from(data), 'event': 'deleted'}));
     socket.on('chat:typing', (data) => _chatTypingController.add(Map<String, dynamic>.from(data)));
+    socket.on('daily:update', (data) {
+      _dailyUpdateController.add(data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{});
+    });
     socket.on('friend:requestReceived', (data) => _friendEventController.add(Map<String, dynamic>.from(data)));
     socket.on('friend:requestAccepted', (data) => _friendEventController.add(Map<String, dynamic>.from(data)));
     socket.on('reaction:new', (data) => _reactionController.add(Map<String, dynamic>.from(data)));
-    socket.on('game:spectators', (data) => _spectatorCountController.add(Map<String, dynamic>.from(data)));
+    socket.on('game:spectators', (data) {
+      final map = Map<String, dynamic>.from(data);
+      // Remember the latest count per game, so a screen that opens AFTER the
+      // update still shows the right number (the stream itself has no replay).
+      final id = map['gameId']?.toString();
+      final count = (map['count'] as num?)?.toInt();
+      if (id != null && count != null) _lastSpectatorCount[id] = count;
+      _spectatorCountController.add(map);
+    });
     socket.on('spectate:ended', (data) => _spectateEndedController.add(Map<String, dynamic>.from(data)));
     socket.on('game:inviteReceived', (data) => _gameInviteController.add(Map<String, dynamic>.from(data)));
+    socket.on('game:inviteCancelled', (data) => _gameInviteCancelledController.add(data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{}));
+    socket.on('game:inviteDeclined', (data) => _gameInviteDeclinedController.add(data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{}));
+    socket.on('live:request', (data) => _liveRequestController.add(Map<String, dynamic>.from(data)));
+    socket.on('live:accepted', (data) => _liveAnswerController.add({...Map<String, dynamic>.from(data), 'accepted': true}));
+    socket.on('live:declined', (data) => _liveAnswerController.add({...Map<String, dynamic>.from(data), 'accepted': false}));
+    socket.on('live:requestCancelled', (data) => _liveCancelledController.add(data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{}));
     socket.on('error', (data) {
       final message = data is Map ? (data['message']?.toString() ?? 'Unknown error') : data.toString();
       _errorController.add(message);
@@ -329,9 +376,6 @@ class GameSocketService {
     _socket?.emit('game:drawResponse', {'gameId': gameId, 'accepted': accepted});
   }
 
-  /// Abort: only allowed by the server before 2 plies have been played.
-  void abortGame(String gameId) => _socket?.emit('game:abort', {'gameId': gameId});
-
   void offerTakeback(String gameId) => _socket?.emit('game:offerTakeback', {'gameId': gameId});
 
   void respondToTakeback({required String gameId, required bool accepted}) {
@@ -375,13 +419,20 @@ class GameSocketService {
   void setReactionsEnabled(String gameId, bool enabled) =>
       _socket?.emit('game:setReactions', {'gameId': gameId, 'enabled': enabled});
 
-  void leaveSpectate(String gameId) => _socket?.emit('spectate:leave', {'gameId': gameId});
+  void leaveSpectate(String gameId) {
+    _lastSpectatorCount.remove(gameId);
+    _socket?.emit('spectate:leave', {'gameId': gameId});
+  }
 
   // ---- Live watching + emoji reactions ----
 
   /// A player turns public Live watching on/off for their running game.
   void setPublicWatch(String gameId, bool enabled) =>
       _socket?.emit('game:setPublicWatch', {'gameId': gameId, 'enabled': enabled});
+
+  /// The opponent's Live request: accept (Live turns on) or decline (Live stays off).
+  void respondToLive({required String gameId, required bool accepted}) =>
+      _socket?.emit('live:respond', {'gameId': gameId, 'accepted': accepted});
 
   /// Sends an emoji reaction ([emoji] is a key from `kReactions`). Players always react to the
   /// opponent; a spectator must pass [targetId] (one of the two players).
@@ -407,5 +458,10 @@ class GameSocketService {
     _friendEventController.close();
     _chatTypingController.close();
     _gameInviteController.close();
+    _gameInviteDeclinedController.close();
+    _gameInviteCancelledController.close();
+    _liveRequestController.close();
+    _liveAnswerController.close();
+    _liveCancelledController.close();
   }
 }

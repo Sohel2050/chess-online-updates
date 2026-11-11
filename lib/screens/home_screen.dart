@@ -31,6 +31,7 @@ import 'package:flutter_chess_app/widgets/unread_badge_widget.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
 import 'friends_screen.dart';
+import 'tournaments_screen.dart';
 import 'options_screen.dart';
 import 'play_screen.dart';
 import 'puzzles_screen.dart';
@@ -166,7 +167,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget _buildInviteCard(BuildContext context, GameRoom invite) {
+    // The dialog surface can be light while the app theme is dark, which made
+    // the theme's light text unreadable. The card sets its own background and
+    // matching text colours so it is readable in every theme.
+    const cardBg = Color(0xFFF1F5F1);
+    const textMain = Color(0xFF1B1B1B);
+    const textSub = Color(0xFF444444);
     return Card(
+      color: cardBg,
       margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -190,11 +198,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     children: [
                       Text(
                         invite.player1DisplayName,
-                        style: Theme.of(context).textTheme.titleMedium,
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(color: textMain, fontWeight: FontWeight.w600),
                       ),
                       Text(
                         'Rating: ${invite.player1Rating}',
-                        style: Theme.of(context).textTheme.bodySmall,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: textSub),
                       ),
                     ],
                   ),
@@ -204,14 +212,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 8),
             Text(
               'Game Mode: ${invite.gameMode}',
-              style: Theme.of(context).textTheme.bodyMedium,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: textMain),
             ),
             if (invite.trainingMode)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   'Training mode: engine move warnings, unrated. Joining means you agree.',
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: textSub),
                 ),
               ),
             const SizedBox(height: 12),
@@ -220,7 +228,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               children: [
                 TextButton(
                   onPressed: () => _declineInvite(context, invite),
-                  child: const Text('Decline'),
+                  child: const Text('Decline', style: TextStyle(color: Color(0xFF2E6B34), fontWeight: FontWeight.w600)),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton(
@@ -283,8 +291,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (context.mounted) {
           LoadingDialog.hide(context);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Game not found or is no longer available.'),
+            SnackBar(
+              content: Text(gameProvider.lastJoinError ?? 'Game not found or is no longer available.'),
               backgroundColor: Colors.orange,
             ),
           );
@@ -633,6 +641,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                       );
                     }
+                  } else if (value == 'tournaments') {
+                    if (!currentUser.isGuest) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => TournamentsScreen(user: currentUser),
+                        ),
+                      );
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('This feature requires an account.'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    }
                   } else if (value == 'weekly') {
                     if (!currentUser.isGuest) {
                       Navigator.of(context).push(
@@ -686,6 +709,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     value: 'ranking',
                     enabled: isOnline,
                     child: const Text('Rankings'),
+                  ),
+                  PopupMenuItem(
+                    value: 'tournaments',
+                    enabled: isOnline,
+                    child: const Text('Tournaments'),
                   ),
                   PopupMenuItem(
                     value: 'weekly',

@@ -6,9 +6,6 @@ import 'package:flutter_chess_app/providers/game_provider.dart';
 import 'package:flutter_chess_app/providers/settings_provider.dart';
 import 'package:flutter_chess_app/providers/user_provider.dart';
 import 'package:flutter_chess_app/screens/game_screen.dart';
-import 'package:flutter_chess_app/screens/daily_games_screen.dart';
-import 'package:flutter_chess_app/screens/clubs_screen.dart';
-import 'package:flutter_chess_app/screens/tournaments_screen.dart';
 import 'package:flutter_chess_app/widgets/monetization_ads_widget.dart'
     show MonetizationAdsWidget, MonetizationAdType;
 import 'package:flutter_chess_app/utils/constants.dart';
@@ -17,6 +14,7 @@ import 'package:flutter_chess_app/widgets/cpu_difficulty_dialog.dart';
 import 'package:flutter_chess_app/widgets/loading_dialog.dart';
 import 'package:flutter_chess_app/services/admin_service.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_chess_app/providers/connectivity_provider.dart';
 import '../models/user_model.dart';
 import '../widgets/daily_puzzle_card.dart';
 import '../widgets/game_mode_card.dart' show GameModeCard, kModeBannerAspect;
@@ -373,6 +371,12 @@ class _PlayScreenState extends State<PlayScreen>
     return 'Could not start the search. Check your internet connection and try again.';
   }
 
+  /// Internet works but our server does not answer: online features are greyed out.
+  bool _serverDown(BuildContext context) {
+    final c = context.watch<ConnectivityProvider>();
+    return c.isOnline && !c.serverReachable;
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
@@ -600,9 +604,13 @@ class _PlayScreenState extends State<PlayScreen>
 
                 if (showDailyCard) ...[
                   const SizedBox(height: dailyCardSpacing),
-                  const SizedBox(
+                  SizedBox(
                     height: dailyCardHeight,
-                    child: DailyPuzzleCard(),
+                    child: Row(
+                      children: [
+                        const Expanded(child: DailyPuzzleCard()),
+                      ],
+                    ),
                   ),
                 ],
 
@@ -657,7 +665,11 @@ class _PlayScreenState extends State<PlayScreen>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       if (_playFeatures['onlineEnabled'] == true) ...[
-                      PlayOptionTile(
+                      Opacity(
+                        opacity: _serverDown(context) ? 0.4 : 1.0,
+                        child: AbsorbPointer(
+                          absorbing: _serverDown(context),
+                          child: PlayOptionTile(
                         title: 'Play Online',
                         subtitle: 'Play with players around the world',
                         icon: Icons.public,
@@ -816,6 +828,8 @@ class _PlayScreenState extends State<PlayScreen>
                           }
                         },
                       ),
+                        ),
+                      ),
                       SizedBox(height: isVerySmallScreen ? 6 : 10),
                       ],
 
@@ -913,51 +927,6 @@ class _PlayScreenState extends State<PlayScreen>
                       ],
 
                       if (_playFeatures['onlineEnabled'] == true && !widget.user.isGuest) ...[
-                      PlayOptionTile(
-                        title: 'Daily Games',
-                        subtitle: 'Slow games with friends, days per move',
-                        icon: Icons.calendar_month,
-                        accentColor: const Color(0xFFF59E0B),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => DailyGamesScreen(user: widget.user),
-                            ),
-                          );
-                        },
-                      ),
-                      SizedBox(height: isVerySmallScreen ? 6 : 10),
-                      PlayOptionTile(
-                        title: 'Tournaments',
-                        subtitle: 'Swiss or knockout, days per move',
-                        icon: Icons.emoji_events,
-                        accentColor: const Color(0xFFEAB308),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => TournamentsScreen(user: widget.user),
-                            ),
-                          );
-                        },
-                      ),
-                      SizedBox(height: isVerySmallScreen ? 6 : 10),
-                      PlayOptionTile(
-                        title: 'Clubs',
-                        subtitle: 'Join a club, weekly ranking, news',
-                        icon: Icons.groups,
-                        accentColor: const Color(0xFF14B8A6),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ClubsScreen(user: widget.user),
-                            ),
-                          );
-                        },
-                      ),
-                      SizedBox(height: isVerySmallScreen ? 6 : 10),
                       ],
                       if (_playFeatures['localMultiplayerEnabled'] == true) ...[
                       PlayOptionTile(

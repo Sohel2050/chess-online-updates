@@ -669,13 +669,21 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
       return;
     }
     try {
-      final nextPuzzle = await _puzzleProvider.nextPuzzle();
-      if (nextPuzzle != null) {
+      // Same list the dialog used to decide that a next puzzle exists. (The provider's own
+      // nextPuzzle() needs a user id and an open session; when either was missing it answered
+      // null and the app wrongly said "completed all puzzles" and closed the screen.)
+      final list = _puzzleProvider.getPuzzlesForDifficulty(widget.puzzle.difficulty);
+      final index = list.indexWhere((p) => p.id == widget.puzzle.id);
+      PuzzleModel? nextPuzzle =
+          (index >= 0 && index < list.length - 1) ? list[index + 1] : null;
+      nextPuzzle ??= await _puzzleProvider.nextPuzzle();
+      final PuzzleModel? found = nextPuzzle;
+      if (found != null) {
         // Replace current screen with new puzzle
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
-              builder: (context) => PuzzleBoardScreen(puzzle: nextPuzzle),
+              builder: (context) => PuzzleBoardScreen(puzzle: found),
             ),
           );
         }
@@ -942,12 +950,14 @@ class _PuzzleBoardScreenState extends State<PuzzleBoardScreen> {
                           if (_hintUci != null)
                             Positioned.fill(
                               child: IgnorePointer(
-                                child: CustomPaint(
-                                  painter: MoveArrowPainter(
-                                    uci: _hintUci,
-                                    flipped: _flipBoard,
-                                    color: const Color(0xCCFFB300),
-                                  ),
+                                child: AnimatedMoveArrow(
+                                  key: ValueKey(_hintUci),
+                                  uci: _hintUci,
+                                  // The board is already turned for Black by
+                                  // squaresState(playerColor); _flipBoard turns it again.
+                                  flipped: (_movePattern.playerColor == Squares.black) !=
+                                      _flipBoard,
+                                  color: const Color(0xCCFFB300),
                                 ),
                               ),
                             ),

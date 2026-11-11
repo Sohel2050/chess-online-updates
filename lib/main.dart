@@ -98,6 +98,11 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   final UserService _userService = UserService();
   final OfflineService _offlineService = OfflineService();
+  // Created ONCE (not inside build): a rebuild used to start a new session
+  // restore and could create several guest accounts.
+  Future<ChessUser?>? _sessionFuture;
+  Future<ChessUser>? _guestFuture;
+
   bool _isMonetizationInitialized = false;
   bool _hasShownAppLaunchAd = false;
 
@@ -112,9 +117,24 @@ class _MyAppState extends State<MyApp> {
   bool _isForceUpdate = true; // Whether update is forced or optional
   bool _dialogShown = false;
 
+  StreamSubscription<MapEntry<String, String>>? _avatarSub;
+
+  @override
+  void dispose() {
+    _avatarSub?.cancel();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    // The default avatar of a new account uploads in the background: show it when ready.
+    _avatarSub = AuthService.avatarReady.listen((e) {
+      final ctx = navigatorKey.currentContext;
+      if (ctx == null) return;
+      final up = Provider.of<UserProvider>(ctx, listen: false);
+      if (up.user?.uid == e.key) up.updateUserPhoto(e.value);
+    });
     // Initialize consent first, then monetization
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeConsentAndMonetization();
@@ -315,11 +335,33 @@ class _MyAppState extends State<MyApp> {
       // App-wide draggable message bubble (hidden in game / puzzle / spectator).
       builder: (context, child) {
         final user = context.watch<UserProvider>().user;
+        final conn = context.watch<ConnectivityProvider>();
         return Stack(
           children: [
             child ?? const SizedBox.shrink(),
             if (user != null && !user.isGuest)
               Positioned.fill(child: FloatingMessageButton(user: user)),
+            // Internet works but our server does not answer: say so, instead of silent failures.
+            if (conn.isOnline && !conn.serverReachable)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: SafeArea(
+                  top: false,
+                  child: Material(
+                    color: Colors.orange.shade800,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      child: Text(
+                        'Server is not reachable. Online features are paused; reconnecting...',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.white, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
           ],
         );
       },
@@ -436,12 +478,40 @@ class _MyAppState extends State<MyApp> {
             // Firestore user-doc lookup). If there's no valid session,
             // fall back to an automatic guest login, same as before.
             return FutureBuilder<ChessUser?>(
-              future: AuthService().restoreSession(),
+              future: _sessionFuture ??= AuthService().restoreSession(),
               builder: (context, sessionSnapshot) {
                 if (sessionSnapshot.connectionState ==
                     ConnectionState.waiting) {
                   return const Scaffold(
                     body: Center(child: CircularProgressIndicator.adaptive()),
+                  );
+                }
+
+                // Logged in, but the server can't be reached and there is no saved copy of the
+                // account yet: wait here (don't create a new guest, it would replace the login).
+                if (sessionSnapshot.hasError) {
+                  return Scaffold(
+                    body: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.cloud_off, size: 56),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'The server is not reachable right now. You are still logged in. Please try again in a moment.',
+                              textAlign: TextAlign.center,
+                            ),
+                            const SizedBox(height: 16),
+                            FilledButton(
+                              onPressed: () => setState(() => _sessionFuture = null),
+                              child: const Text('Try again'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   );
                 }
 
@@ -477,7 +547,7 @@ class _MyAppState extends State<MyApp> {
                 // same behavior as the old "no authenticated user" branch.
                 return AgeGate(
                   builder: (_) => FutureBuilder<ChessUser>(
-                  future: AuthService().signInAnonymously(),
+                  future: _guestFuture ??= AuthService().signInAnonymously(),
                   builder: (context, guestSnapshot) {
                     if (guestSnapshot.connectionState ==
                         ConnectionState.waiting) {
@@ -492,7 +562,38 @@ class _MyAppState extends State<MyApp> {
                       return _buildHomeScreen(guestUser);
                     }
 
-                    return const LoginScreen();
+                    // The automatic guest sign-in failed (no internet / server
+                    // problem). Say so and let the user retry, instead of
+                    // suddenly asking for an account.
+                    return Scaffold(
+                      body: Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.cloud_off, size: 56),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Could not connect. Please check your internet and try again.',
+                                textAlign: TextAlign.center,
+                              ),
+                              const SizedBox(height: 16),
+                              FilledButton(
+                                onPressed: () => setState(() => _guestFuture = null),
+                                child: const Text('Try again'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                                ),
+                                child: const Text('I have an account: Log in'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
                   },
                   ),
                 );

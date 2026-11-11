@@ -128,8 +128,8 @@ class _TournamentsScreenState extends State<TournamentsScreen> {
     );
     final name = nameCtrl.text;
     final desc = descCtrl.text;
-    nameCtrl.dispose();
-    descCtrl.dispose();
+    _disposeLater(nameCtrl);
+    _disposeLater(descCtrl);
     if (ok != true) return;
     try {
       final t = await _service.create(
@@ -202,4 +202,11 @@ class _TournamentsScreenState extends State<TournamentsScreen> {
         trailing: const Icon(Icons.chevron_right),
         onTap: () => _open(t.id),
       );
+}
+
+/// Disposes a dialog's controller only after the dialog's closing animation is over.
+/// Disposing right after `await showDialog(...)` while the TextField is still on
+/// screen triggers the "_dependents.isEmpty" red-screen assertion.
+void _disposeLater(TextEditingController c) {
+  Future<void>.delayed(const Duration(milliseconds: 600), c.dispose);
 }

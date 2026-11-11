@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/screens/import_pgn_screen.dart';
+import 'package:flutter_chess_app/screens/spectator_screen.dart';
+import 'package:flutter_chess_app/services/api_client.dart';
 import 'package:flutter_chess_app/services/offline_service.dart';
 import 'package:flutter_chess_app/utils/share_link.dart';
 
@@ -31,7 +33,36 @@ class DeepLinkService {
     }
   }
 
+  /// https://<host>/live/<code>: opens the live (spectator) screen of that game.
+  Future<void> _handleLive(String code) async {
+    final now = DateTime.now();
+    if (_lastOpened == 'live:$code' && _lastOpenedAt != null && now.difference(_lastOpenedAt!) < const Duration(seconds: 5)) return;
+    _lastOpened = 'live:$code';
+    _lastOpenedAt = now;
+    for (var i = 0; i < 40; i++) {
+      final nav = _navigatorKey?.currentState;
+      final user = nav == null ? null : await OfflineService().getCachedUser();
+      if (nav != null && user != null) {
+        // The link carries a short code; ask the server which game it is.
+        // If the server does not know the lookup, the code is used as the game id.
+        var gameId = code;
+        try {
+          final r = await ApiClient.instance.get('/games/live/$code');
+          final id = r['gameId']?.toString();
+          if (id != null && id.isNotEmpty) gameId = id;
+        } catch (_) {}
+        nav.push(MaterialPageRoute(builder: (_) => SpectatorScreen(gameId: gameId)));
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+  }
+
   Future<void> _handle(Uri uri) async {
+    final segs = uri.pathSegments;
+    if (segs.length >= 2 && segs.first == 'live' && segs[1].isNotEmpty) {
+      return _handleLive(segs[1]);
+    }
     final text = uri.toString();
     final code = ShareLink.extractCode(text);
     if (code == null) return;

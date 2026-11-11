@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/services/friend_service.dart';
@@ -17,67 +19,87 @@ class OnlineFriendsPill extends StatefulWidget {
 
 class _OnlineFriendsPillState extends State<OnlineFriendsPill> {
   static const _green = Color(0xFF22C55E);
-  Stream<List<ChessUser>>? _friends;
-  late Stream<Map<String, int>> _stats;
+  StreamSubscription<List<ChessUser>>? _friendsSub;
+  StreamSubscription<Map<String, int>>? _statsSub;
+  int _friendsOnline = 0;
+  int _total = 0;
 
   @override
   void initState() {
     super.initState();
-    _stats = UserService().getGameStatsStream();
-    _friends = _friendsStream();
+    // Subscribe manually (once) instead of handing single-subscription
+    // streams to a StreamBuilder, which re-listens when it is remounted
+    // (e.g. on tab change) and throws "Stream has already been listened to".
+    _statsSub = UserService().getGameStatsStream().listen((s) {
+      if (!mounted) return;
+      setState(() => _total = s['online'] ?? 0);
+    }, onError: (_) {});
+    _subscribeFriends();
   }
 
-  Stream<List<ChessUser>>? _friendsStream() {
+  void _subscribeFriends() {
+    _friendsSub?.cancel();
+    _friendsSub = null;
     final id = widget.userId;
-    if (id == null || id.isEmpty) return null;
-    return FriendService().getFriends(id);
+    if (id == null || id.isEmpty) {
+      _friendsOnline = 0;
+      return;
+    }
+    _friendsSub = FriendService().getFriends(id).listen((list) {
+      if (!mounted) return;
+      setState(() => _friendsOnline = list.where((f) => f.isOnline).length);
+    }, onError: (_) {});
   }
 
   @override
   void didUpdateWidget(OnlineFriendsPill oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.userId != widget.userId) _friends = _friendsStream();
+    if (oldWidget.userId != widget.userId) _subscribeFriends();
+  }
+
+  @override
+  void dispose() {
+    _friendsSub?.cancel();
+    _statsSub?.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 76),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: _pill(context),
+      ),
+    );
+  }
+
+  Widget _pill(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
         color: _green.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _green.withValues(alpha: 0.4)),
       ),
-      child: StreamBuilder<Map<String, int>>(
-        stream: _stats,
-        builder: (context, statsSnap) {
-          final total = statsSnap.data?['online'] ?? 0;
-          return StreamBuilder<List<ChessUser>>(
-            stream: _friends,
-            builder: (context, friendsSnap) {
-              final friendsOnline =
-                  (friendsSnap.data ?? const <ChessUser>[]).where((f) => f.isOnline).length;
-              return Tooltip(
-                message: 'Friends online / players online',
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.people, color: _green, size: 15),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$friendsOnline/$total',
-                      style: const TextStyle(
-                        color: _green,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12.5,
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
-        },
+      child: Tooltip(
+        message: 'Friends online / players online',
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.people, color: _green, size: 13),
+            const SizedBox(width: 3),
+            Text(
+              '$_friendsOnline/$_total',
+              style: const TextStyle(
+                color: _green,
+                fontWeight: FontWeight.bold,
+                fontSize: 11.5,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

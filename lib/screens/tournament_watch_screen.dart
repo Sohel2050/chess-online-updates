@@ -46,7 +46,9 @@ class _TournamentWatchScreenState extends State<TournamentWatchScreen> {
       final game = await _service.watchGame(widget.tournamentId, widget.gameId);
       if (!mounted) return;
       _g.rebuild(game.moves);
+      final justEnded = (_game?.isActive ?? false) && !game.isActive;
       setState(() {
+        if (justEnded) _flipped = false; // a manual flip only lasts while the game is on
         _game = game;
         _loading = false;
         _error = null;
@@ -80,7 +82,9 @@ class _TournamentWatchScreenState extends State<TournamentWatchScreen> {
                     Text(_statusText(g), style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
                     if (_error != null) Padding(padding: const EdgeInsets.only(top: 4), child: Text(_error!, textAlign: TextAlign.center)),
                     const SizedBox(height: 12),
-                    LearnBoard(state: _g.squares(_g.turn), flipped: _flipped), // no onMove: nobody can move here
+                    // squares(side) already puts that side at the bottom: white by default, black after the flip button.
+                    // (squares(_g.turn) turned the board after every move.)
+                    LearnBoard(state: _g.squares(_flipped ? 1 : 0)), // no onMove: nobody can move here
                     const SizedBox(height: 12),
                     Text(_moveText(g.moves), style: Theme.of(context).textTheme.bodySmall),
                   ]),

@@ -215,11 +215,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           appBar: AppBar(
             title: const Text('Profile'),
             actions: [
-              if (!_isGuest)
-                IconButton(
-                  icon: const Icon(Icons.save),
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: FilledButton.icon(
                   onPressed: () => _saveProfile(userService),
+                  icon: const Icon(Icons.save_rounded, size: 18),
+                  label: const Text('Save'),
                 ),
+              ),
             ],
           ),
           body: SingleChildScrollView(
@@ -230,7 +233,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ProfileImageWidget(
                   imageUrl: _currentUser.photoUrl,
                   radius: 60,
-                  isEditable: !_isGuest,
+                  isEditable: true,
+                  avatarOnly: _isGuest,
                   selectedImageFile: _selectedImageFile,
                   selectedAvatar: _selectedAvatar,
                   onImageSelected: (file) {
@@ -260,6 +264,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     });
                   },
                 ),
+                // A new picture is only kept after Save: make that obvious.
+                if (_selectedAvatar != null || _selectedImageFile != null || _imageRemoved) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Tap Save (top right) to keep your new picture',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 24),
                 _buildProfileField(
                   context,
@@ -740,7 +752,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           currentSelectedImageFile,
         );
       } else if (currentSelectedAvatar != null) {
-        newPhotoUrl = currentSelectedAvatar;
+        LoadingDialog.updateMessage(context, 'Saving avatar...');
+        newPhotoUrl = await userService.uploadAvatarAsset(currentSelectedAvatar);
       }
 
       final updatedUser = _currentUser.copyWith(
@@ -753,7 +766,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         LoadingDialog.updateMessage(context, 'Updating profile...');
       }
 
-      await userService.updateUser(updatedUser);
+      // The avatar was already stored by the upload above, so when it is the only
+      // change there is nothing more to send.
+      final onlyAvatarChanged = currentSelectedAvatar != null &&
+          currentSelectedImageFile == null &&
+          !currentImageRemoved &&
+          newDisplayName == _currentUser.displayName &&
+          _countryCode == _currentUser.countryCode;
+      if (onlyAvatarChanged) {
+        // Avatar only: the upload already saved it on the server.
+      } else {
+        await userService.updateUser(updatedUser);
+      }
 
       // Update the UserProvider first - this will trigger _onUserChanged
       if (mounted) {
@@ -780,7 +804,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         LoadingDialog.hide(context);
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Failed to save profile: $e')));
+        ).showSnackBar(SnackBar(content: Text('Failed to save profile: ${e.toString().replaceFirst('Exception: ', '')}')));
       }
     }
   }

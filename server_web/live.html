@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Watch live chess</title>
+<meta property="og:title" content="Watch this chess game live">
+<meta property="og:description" content="A game is being played right now. Tap to watch.">
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--text:#f1f5f9;--muted:#94a3b8;--accent:#22c55e;--red:#ef4444;--light:#f0d9b5;--dark:#b58863}
+  @media (prefers-color-scheme: light){:root{--bg:#f1f5f9;--card:#ffffff;--text:#0f172a;--muted:#64748b}}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow-x:hidden}
+  .wrap{max-width:520px;margin:0 auto;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .top{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .live{background:linear-gradient(135deg,#ef4444,#b91c1c);color:#fff;font-weight:800;font-size:12px;padding:4px 10px;border-radius:20px;white-space:nowrap}
+  .live.off{background:#64748b}
+  .title{flex:1;min-width:0;font-weight:800;font-size:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .player{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:8px 10px}
+  .player.turn{outline:2px solid var(--accent)}
+  .avatar{width:40px;height:40px;border-radius:50%;background:#475569;flex:none;object-fit:cover}
+  .info{flex:1;min-width:0}
+  .name{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rating{font-size:12px;color:var(--muted)}
+  .clock{font-family:ui-monospace,Menlo,monospace;font-weight:700;background:rgba(148,163,184,.18);padding:6px 10px;border-radius:8px;flex:none}
+  .board{width:100%;aspect-ratio:1/1;display:grid;grid-template-columns:repeat(8,1fr);border-radius:10px;overflow:hidden;margin:8px 0;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+  .sq{display:flex;align-items:center;justify-content:center;font-size:min(9vw,46px);line-height:1;user-select:none}
+  .sq.l{background:var(--light)}.sq.d{background:var(--dark)}
+  .w{color:#fff;text-shadow:0 0 2px #000,0 0 2px #000,0 0 3px #000}.b{color:#111}
+  .msg{text-align:center;color:var(--muted);margin:10px 0}
+  .cta{background:linear-gradient(135deg,#22c55e,#15803d);border-radius:16px;padding:14px;margin-top:10px;color:#fff}
+  .cta h3{margin:0 0 4px;font-size:16px}.cta p{margin:0 0 10px;font-size:13px;opacity:.9}
+  .btns{display:flex;gap:8px;flex-wrap:wrap}
+  .btn{flex:1 1 140px;text-align:center;text-decoration:none;font-weight:700;padding:10px 12px;border-radius:10px;border:0;cursor:pointer;font-size:14px}
+  .btn.primary{background:#fff;color:#166534}.btn.ghost{background:rgba(255,255,255,.18);color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><span id="badge" class="live">LIVE</span><div id="title" class="title">Loading...</div></div>
+  <div id="black" class="player"></div>
+  <div id="board" class="board"></div>
+  <div id="white" class="player"></div>
+  <div id="msg" class="msg"></div>
+  <div class="cta">
+    <h3>Have the app?</h3>
+    <p>Open this game in the app to send emoji reactions. Or keep watching here.</p>
+    <div class="btns">
+      <a id="open" class="btn primary" href="#">Open in app</a>
+      <a id="install" class="btn ghost" href="https://play.google.com/store/apps/details?id=com.albonik.chess">Install the app</a>
+    </div>
+  </div>
+</div>
+<script>
+const CODE = location.pathname.split('/').filter(Boolean).pop();
+// Same host serves the JSON: GET /games/live/<code>
+const API = '/games/live/' + encodeURIComponent(CODE);
+const GLYPH = {K:'\u2654',Q:'\u2655',R:'\u2656',B:'\u2657',N:'\u2658',P:'\u2659',k:'\u265A',q:'\u265B',r:'\u265C',b:'\u265D',n:'\u265E',p:'\u265F'};
+document.getElementById('open').href =
+  'intent://live/' + CODE + '#Intent;scheme=https;package=com.albonik.chess;S.browser_fallback_url=' +
+  encodeURIComponent('https://play.google.com/store/apps/details?id=com.albonik.chess') + ';end';
+
+function esc(t){const d=document.createElement('div');d.textContent=t==null?'':String(t);return d.innerHTML}
+function fmt(ms){ms=Math.max(0,ms|0);const s=Math.floor(ms/1000);return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')}
+function player(el,p,ms,turn){
+  el.className='player'+(turn?' turn':'');
+  const img=p.photoUrl&&/^https?:/.test(p.photoUrl)?'<img class="avatar" src="'+esc(p.photoUrl)+'" alt="">':'<div class="avatar"></div>';
+  el.innerHTML=img+'<div class="info"><div class="name">'+esc(p.name||'Player')+'</div><div class="rating">Rating '+esc(p.rating||'')+'</div></div><div class="clock">'+fmt(ms)+'</div>';
+}
+function drawBoard(fen){
+  const rows=fen.split(' ')[0].split('/');let html='';
+  rows.forEach((row,r)=>{let c=0;for(const ch of row){
+    if(/\d/.test(ch)){for(let i=0;i<+ch;i++){html+=sq(r,c++,'')}}
+    else{html+=sq(r,c++,'<span class="'+(ch===ch.toUpperCase()?'w':'b')+'">'+GLYPH[ch]+'</span>')}}});
+  document.getElementById('board').innerHTML=html;
+}
+function sq(r,c,inner){return '<div class="sq '+((r+c)%2?'d':'l')+'">'+inner+'</div>'}
+async function tick(){
+  try{
+    const res=await fetch(API,{cache:'no-store'});
+    if(res.status===404||res.status===403){end('This game is not available. Live may be off or the game ended.');return}
+    const g=await res.json();
+    const over=g.status!=='active';
+    document.getElementById('title').textContent=(g.white&&g.black)?(g.white.name+' vs '+g.black.name):'Live game';
+    const badge=document.getElementById('badge');badge.textContent=over?'ENDED':'LIVE';badge.className='live'+(over?' off':'');
+    drawBoard(g.fen);
+    const whiteTurn=g.fen.split(' ')[1]==='w';
+    player(document.getElementById('white'),g.white||{},g.whiteTimeMs,!over&&whiteTurn);
+    player(document.getElementById('black'),g.black||{},g.blackTimeMs,!over&&!whiteTurn);
+    document.getElementById('msg').textContent=over?'Game over'+(g.endReason?' · '+g.endReason:''):'';
+    if(!over)setTimeout(tick,2000);
+  }catch(e){document.getElementById('msg').textContent='Connection problem. Retrying...';setTimeout(tick,4000)}
+}
+function end(t){document.getElementById('title').textContent='Live';document.getElementById('badge').className='live off';document.getElementById('badge').textContent='OFF';document.getElementById('msg').textContent=t}
+tick();
+</script>
+</body>
+</html>

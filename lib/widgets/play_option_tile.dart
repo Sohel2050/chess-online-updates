@@ -64,7 +64,7 @@ class PlayOptionTile extends StatelessWidget {
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
@@ -74,6 +74,7 @@ class PlayOptionTile extends StatelessWidget {
                         fontWeight: FontWeight.bold,
                         fontSize: isVerySmallScreen ? 15 : 17,
                       ),
+                      textAlign: TextAlign.center,
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
@@ -83,6 +84,7 @@ class PlayOptionTile extends StatelessWidget {
                         color: Colors.white.withValues(alpha: 0.6),
                         fontSize: isVerySmallScreen ? 11 : 13,
                       ),
+                      textAlign: TextAlign.center,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],

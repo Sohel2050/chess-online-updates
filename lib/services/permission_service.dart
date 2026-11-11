@@ -212,7 +212,7 @@ class PermissionService {
       barrierDismissible: false,
       builder: (BuildContext context) {
         return AlertDialog(
-          title: Text('$permissionName Permission Required'),
+          title: Text('$permissionName Permission Required', maxLines: 2, overflow: TextOverflow.ellipsis),
           content: Text(
             '$permissionName permission is required for this feature to work. '
             'Please enable it in your device settings.\n\n'
@@ -247,25 +247,74 @@ class PermissionService {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: Row(
-            children: [
-              Icon(icon, color: Theme.of(context).primaryColor),
-              const SizedBox(width: 8),
-              Text(title),
-            ],
+        final cs = Theme.of(context).colorScheme;
+        final tt = Theme.of(context).textTheme;
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Material(
+              color: cs.surface,
+              borderRadius: BorderRadius.circular(28),
+              clipBehavior: Clip.antiAlias,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: cs.primaryContainer,
+                        ),
+                        child: Icon(icon, size: 36, color: cs.primary),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      style: tt.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: tt.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    FilledButton(
+                      onPressed: () => Navigator.of(context).pop(true),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(50),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Text(
+                        'Allow',
+                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      child: const Text('Not now'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Not Now'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Allow'),
-            ),
-          ],
         );
       },
     );

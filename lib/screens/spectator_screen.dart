@@ -151,46 +151,87 @@ class _SpectatorViewState extends State<_SpectatorView> {
             ),
             white,
             if (over)
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Text(
-                  'Game over${room.endReason != null ? ' · ${room.endReason}' : ''}',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+              _statusCard(
+                context,
+                icon: Icons.flag_rounded,
+                text: 'Game over${room.endReason != null ? ' · ${room.endReason}' : ''}',
               )
+            else if (room.publicWatch || room.friendsWatch)
+              // Live is ON: viewers can react.
+              GameReactionPanel(room: room, myId: myId, isSpectator: true)
             else
-              GameReactionPanel(room: room, myId: myId, isSpectator: true),
+              // Live is OFF: no emoji panel for viewers.
+              _statusCard(
+                context,
+                icon: Icons.visibility_off_rounded,
+                text: 'Live is off - emoji reactions are not available.',
+              ),
+            const SizedBox(height: 12),
           ],
         ),
       ),
     );
   }
 
+  Widget _statusCard(BuildContext context, {required IconData icon, required String text}) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: cs.onSurfaceVariant),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: Theme.of(context).textTheme.bodyMedium)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildPlayerInfo(BuildContext context, String name, String? photoUrl, int rating, int ms, GameProvider gameProvider) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: Row(
         children: [
           ProfileImageWidget(imageUrl: photoUrl, radius: 20),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
+          // Expanded + ellipsis: a long name can never push the clock off screen.
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(name, style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
                 Text('Rating: $rating', style: Theme.of(context).textTheme.bodySmall),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(8),
+              color: cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Text(
               gameProvider.getFormattedTime(Duration(milliseconds: ms)),
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontFamily: 'monospace'),
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(fontFamily: 'monospace', fontWeight: FontWeight.w700),
             ),
           ),
         ],

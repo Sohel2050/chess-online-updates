@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart' show rootBundle;
 import 'dart:async';
 import 'dart:ui' show PlatformDispatcher;
 import 'dart:io';
@@ -76,7 +77,7 @@ class UserService {
       }
     }
 
-    controller = StreamController<Map<String, int>>(
+    controller = StreamController<Map<String, int>>.broadcast(
       onListen: () {
         // 1. The server pushes the numbers by socket (about 2 s after any change, and at once on subscribe).
         pushSub = socketService.onLiveStats.listen((e) {
@@ -279,6 +280,40 @@ class UserService {
     }
   }
 
+  /// The server only accepts a profile picture through the photo upload (it
+  /// answers "Use the photo upload to change your picture" to an asset path),
+  /// so a built-in avatar is uploaded like a normal photo. Returns the new
+  /// photoUrl.
+  Future<String> uploadAvatarAsset(String assetPath) async {
+    try {
+      final data = await rootBundle.load(assetPath);
+      final result = await ApiClient.instance.uploadFile(
+        '/users/me/profile-image',
+        field: 'image',
+        bytes: data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        filename: 'avatar.jpg',
+      );
+      return result['photoUrl'] as String;
+    } on ApiException catch (e) {
+      throw Exception(e.message);
+    } catch (e) {
+      throw Exception('Could not upload the avatar. Check your connection and try again.');
+    }
+  }
+
+  /// Saves ONLY the photo / avatar. The name and country are not sent, so a
+  /// guest (whose generated name may not pass the name check) can still save
+  /// an avatar. Throws the server's real message on failure.
+  Future<void> updatePhotoUrl(String photoUrl) async {
+    try {
+      await ApiClient.instance.put('/users/me', body: {'photoUrl': photoUrl});
+    } on ApiException catch (e) {
+      throw Exception(e.message);
+    } catch (e) {
+      throw Exception('Could not reach the server. Check your connection and try again.');
+    }
+  }
+
   Future<void> updateUser(ChessUser user) async {
     bool isValid = isValidName(user.displayName);
     if (!isValid) {
@@ -290,6 +325,8 @@ class UserService {
         if (user.photoUrl != null) 'photoUrl': user.photoUrl,
         if (user.countryCode != null) 'countryCode': user.countryCode,
       });
+    } on ApiException catch (e) {
+      throw Exception(e.message);
     } catch (e) {
       throw Exception('An unknown error occurred while updating user data.');
     }

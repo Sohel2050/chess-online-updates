@@ -25,7 +25,10 @@ class FloatingMessageController {
 /// - Shows only while there is something unread (admin message or friend chat).
 /// - Drag it anywhere; tap the small X to hide it. It comes back by itself
 ///   when a NEW unread message arrives.
-/// - Tap it to see the unread admin messages and friend chats, and open them.
+/// - Tap it to open the chat with the friend who wrote to you right away (no list in between).
+///   Several unread chats: the next one opens after you have read the first.
+///   An unread admin message opens its detail page when there is no friend chat.
+///   Only if nothing can be opened directly does it fall back to the unread list.
 class FloatingMessageButton extends StatefulWidget {
   final ChessUser user;
   const FloatingMessageButton({super.key, required this.user});
@@ -44,6 +47,7 @@ class _FloatingMessageButtonState extends State<FloatingMessageButton>
   int _chatUnread = 0;
   int _dismissedAt = 0; // total unread when the person pressed X
   Offset? _pos; // null = default spot (right side, above the nav bar)
+  bool _opening = false;
 
   int get _total => _adminUnread + _chatUnread;
   bool get _visible => _total > 0 && _total > _dismissedAt;
@@ -90,6 +94,67 @@ class _FloatingMessageButtonState extends State<FloatingMessageButton>
     } catch (_) {/* keep the old numbers */}
   }
 
+  /// Opens the chat straight away instead of showing a list.
+  Future<void> _openChat() async {
+    if (_opening) return;
+    _opening = true;
+    try {
+      final ctx = _navContext;
+      if (ctx == null) return;
+
+      // 1) A friend who wrote to me: open that chat.
+      ChessUser? target;
+      if (_chatUnread > 0) {
+        try {
+          final friends = await FriendService().getFriends(widget.user.uid!).first;
+          final counts = await Future.wait(friends.map((f) async {
+            try {
+              final r = await ApiClient.instance.get('/chat/${f.uid}/unread-count');
+              return (r['count'] as num?)?.toInt() ?? 0;
+            } catch (_) {
+              return 0;
+            }
+          }));
+          for (var i = 0; i < friends.length; i++) {
+            if (counts[i] > 0) {
+              target = friends[i];
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+      if (target != null) {
+        final friend = target;
+        await Navigator.of(ctx).push(MaterialPageRoute(
+          builder: (_) => ChatScreen(currentUser: widget.user, otherUser: friend),
+        ));
+        return;
+      }
+
+      // 2) No friend chat but an unread admin message: open it.
+      if (_adminUnread > 0) {
+        try {
+          final page = await _messages.getMessages();
+          final unread = page.messages.where((m) => !m.isRead).toList();
+          if (unread.isNotEmpty) {
+            final m = unread.first;
+            unawaited(_messages.trackClick(m.id));
+            await Navigator.of(ctx).push(MaterialPageRoute(
+              builder: (_) => MessageDetailScreen(messageId: m.id, title: m.title),
+            ));
+            return;
+          }
+        } catch (_) {}
+      }
+
+      // 3) Nothing could be opened directly: show the list as before.
+      await _openSheet();
+    } finally {
+      _opening = false;
+      if (mounted) _refresh();
+    }
+  }
+
   Future<void> _openSheet() async {
     final ctx = _navContext;
     if (ctx == null) return;
@@ -114,9 +179,13 @@ class _FloatingMessageButtonState extends State<FloatingMessageButton>
   Widget _bubble() {
     return LayoutBuilder(builder: (context, c) {
       const size = 56.0;
-      final pos = _pos ?? Offset(c.maxWidth - size - 16, c.maxHeight - size - 24);
-      final dx = pos.dx.clamp(0.0, (c.maxWidth - size).clamp(0.0, double.infinity));
-      final dy = pos.dy.clamp(0.0, (c.maxHeight - size).clamp(0.0, double.infinity));
+      const closeArea = 34.0; // tappable area of the X
+      const gap = 6.0; // space between the bubble and the X
+      const boxW = size + gap + closeArea;
+      const boxH = size + 18.0;
+      final pos = _pos ?? Offset(c.maxWidth - boxW - 8, c.maxHeight - boxH - 24);
+      final dx = pos.dx.clamp(0.0, (c.maxWidth - boxW).clamp(0.0, double.infinity));
+      final dy = pos.dy.clamp(0.0, (c.maxHeight - boxH).clamp(0.0, double.infinity));
       return Stack(children: [
         Positioned(
           left: dx,
@@ -124,8 +193,8 @@ class _FloatingMessageButtonState extends State<FloatingMessageButton>
           child: GestureDetector(
             onPanUpdate: (d) => setState(() => _pos = Offset(dx, dy) + d.delta),
             child: SizedBox(
-              width: size + 12,
-              height: size + 12,
+              width: boxW,
+              height: boxH,
               child: Stack(clipBehavior: Clip.none, children: [
                 Positioned(
                   left: 0,
@@ -138,7 +207,7 @@ class _FloatingMessageButtonState extends State<FloatingMessageButton>
                       elevation: 6,
                       child: InkWell(
                         customBorder: const CircleBorder(),
-                        onTap: _openSheet,
+                        onTap: _openChat,
                         child: const SizedBox(
                           width: size,
                           height: size,
@@ -152,11 +221,18 @@ class _FloatingMessageButtonState extends State<FloatingMessageButton>
                   right: 0,
                   top: 0,
                   child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
                     onTap: () => setState(() => _dismissedAt = _total),
-                    child: const CircleAvatar(
-                      radius: 11,
-                      backgroundColor: Colors.black87,
-                      child: Icon(Icons.close, size: 14, color: Colors.white),
+                    child: const SizedBox(
+                      width: closeArea,
+                      height: closeArea,
+                      child: Center(
+                        child: CircleAvatar(
+                          radius: 12,
+                          backgroundColor: Colors.black87,
+                          child: Icon(Icons.close, size: 15, color: Colors.white),
+                        ),
+                      ),
                     ),
                   ),
                 ),

@@ -47,9 +47,11 @@ class GameInviteService {
         _logger.e('Error fetching game invites: $e');
         yield [];
       }
+      // Refresh at once when an invite arrives or is cancelled, else every 5 seconds.
       await Future.any([
         Future.delayed(const Duration(seconds: 5)),
         GameSocketService.instance.onGameInviteReceived.first,
+        GameSocketService.instance.onGameInviteCancelled.first,
       ]);
     }
   }
@@ -68,6 +70,16 @@ class GameInviteService {
     } catch (e) {
       _logger.e('Error declining game invite: $e');
       rethrow;
+    }
+  }
+
+  /// The host cancels an invite nobody joined: removes the waiting room so it also
+  /// disappears from the friend's list. Failures are ignored (the server may not allow it yet).
+  Future<void> cancelInvite(String gameId) async {
+    try {
+      await _api.delete('/games/invites/$gameId');
+    } catch (e) {
+      _logger.w('Could not cancel invite on the server: $e');
     }
   }
 

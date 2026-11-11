@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import 'package:squares/squares.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:in_app_review/in_app_review.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/user_model.dart';
 import '../providers/mission_provider.dart';
 import '../services/sound_service.dart';
@@ -277,22 +278,35 @@ class _OptionsScreenState extends State<OptionsScreen> {
             title: 'Rate the App',
             icon: Icons.star,
             onTap: () async {
-              final InAppReview inAppReview = InAppReview.instance;
-              final reviewAvailable = await inAppReview.isAvailable();
-              if (!context.mounted) return;
-              if (reviewAvailable) {
-                log('In-app review is available');
-                inAppReview.requestReview();
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'In-app review is not available on this device.',
-                    ),
-                    duration: Duration(seconds: 2),
-                  ),
-                );
+              // A Settings "Rate" button must always do something visible. The
+              // in-app review popup is rate-limited by Google Play (and never
+              // shows for sideloaded/test builds), so open the store page where
+              // the user can leave a review.
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await InAppReview.instance.openStoreListing();
+                return;
+              } catch (e) {
+                log('openStoreListing failed: $e');
               }
+              try {
+                final info = await PackageInfo.fromPlatform();
+                final ok = await launchUrl(
+                  Uri.parse(
+                    'https://play.google.com/store/apps/details?id=${info.packageName}',
+                  ),
+                  mode: LaunchMode.externalApplication,
+                );
+                if (ok) return;
+              } catch (e) {
+                log('Rate fallback failed: $e');
+              }
+              messenger.showSnackBar(
+                const SnackBar(
+                  content: Text('Could not open the store. Please try again later.'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
             },
           ),
           const Divider(),
@@ -346,19 +360,34 @@ class _OptionsScreenState extends State<OptionsScreen> {
               );
             },
           ),
-          // const Divider(),
-          // _buildSectionHeader('More'),
-          // _buildListTile(
-          //   title: 'Get More Apps',
-          //   icon: Icons.shop,
-          //   onTap: () {
-          //     launchUrl(
-          //       Uri.parse(
-          //         'https://play.google.com/store/apps/developer?id=FLC+Business+Group',
-          //       ),
-          //     );
-          //   },
-          // ),
+          const Divider(),
+          _buildSectionHeader('More'),
+          _buildListTile(
+            title: 'More Apps',
+            icon: Icons.apps,
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              bool ok = false;
+              try {
+                ok = await launchUrl(
+                  Uri.parse(
+                    'https://play.google.com/store/apps/dev?id=5662539472191775885',
+                  ),
+                  mode: LaunchMode.externalApplication,
+                );
+              } catch (e) {
+                log('More Apps failed: $e');
+              }
+              if (!ok) {
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('Could not open the Play Store.'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              }
+            },
+          ),
         ],
       ),
     ),

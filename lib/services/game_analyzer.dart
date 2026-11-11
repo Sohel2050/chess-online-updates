@@ -138,7 +138,12 @@ class GameAnalyzer {
       Duration(milliseconds: moveTimeMs + 3000),
       onTimeout: () async {
         _sf?.stdin = 'stop';
-        await Future.delayed(const Duration(milliseconds: 300));
+        // Wait for the engine's answer to "stop" so a late "bestmove" cannot
+        // end the NEXT evaluation too early and give a wrong warning.
+        await _done!.future.timeout(
+          const Duration(seconds: 1),
+          onTimeout: () {},
+        );
       },
     );
     return PositionEval(_parser.cpWhite, _parser.best);

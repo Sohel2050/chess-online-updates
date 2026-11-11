@@ -289,6 +289,10 @@ class WatchingCountBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     return StreamBuilder<Map<String, dynamic>>(
       stream: GameSocketService.instance.onSpectatorCount.where((d) => d['gameId'] == gameId),
+      initialData: {
+        'gameId': gameId,
+        'count': GameSocketService.instance.lastSpectatorCount(gameId),
+      },
       builder: (context, snap) {
         final count = (snap.data?['count'] as num?)?.toInt() ?? 0;
         if (count <= 0) return const SizedBox.shrink();

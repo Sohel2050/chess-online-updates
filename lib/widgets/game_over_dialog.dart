@@ -10,6 +10,7 @@ import 'package:flutter_chess_app/providers/game_provider.dart' as bishop;
 
 import 'package:flutter_chess_app/screens/game_replay_screen.dart';
 import 'package:flutter_chess_app/widgets/report_game_dialog.dart';
+import 'package:flutter_chess_app/widgets/profile_image_widget.dart';
 import 'package:flutter_chess_app/services/saved_game_service.dart';
 import 'package:provider/provider.dart';
 
@@ -61,9 +62,14 @@ class _GameOverDialogState extends State<GameOverDialog> {
 
   void _onGameProviderUpdate() {
     // Force rebuild when game provider changes (e.g., when rematch is cancelled/rejected)
-    if (mounted) {
-      setState(() {});
+    if (!mounted) return;
+    final err = gameProvider.rematchError;
+    if (err != null) {
+      gameProvider.clearRematchError();
+      _showRematchStatus(err, isError: true); // also rebuilds
+      return;
     }
+    setState(() {});
   }
 
   @override
@@ -84,7 +90,12 @@ class _GameOverDialogState extends State<GameOverDialog> {
       final winner = (widget.result as bishop.WonGame).winner;
       String winnerName = '';
       if (onlineGameRoom != null) {
-        if (onlineGameRoom.player1Color == winner) {
+        final myColor = gameProvider.isHost
+            ? onlineGameRoom.player1Color
+            : onlineGameRoom.player2Color;
+        if (myColor == winner) {
+          winnerName = 'You';
+        } else if (onlineGameRoom.player1Color == winner) {
           winnerName = onlineGameRoom.player1DisplayName;
         } else if (onlineGameRoom.player2Color == winner) {
           winnerName = onlineGameRoom.player2DisplayName ?? 'Opponent';
@@ -148,90 +159,6 @@ class _GameOverDialogState extends State<GameOverDialog> {
     return null;
   }
 
-  /// Big coloured banner: Victory (gold/green), Defeat (red) or Draw (blue-grey).
-  Widget _buildOutcomeBanner(BuildContext context, GameProvider gameProvider) {
-    final outcome = _outcomeForMe(gameProvider);
-    final cs = Theme.of(context).colorScheme;
-
-    late final Color color;
-    late final IconData icon;
-    late final String headline;
-    switch (outcome) {
-      case 1:
-        color = const Color(0xFFF9A825);
-        icon = Icons.emoji_events_rounded;
-        headline = 'Victory!';
-        break;
-      case -1:
-        color = const Color(0xFFD32F2F);
-        icon = Icons.sentiment_dissatisfied_rounded;
-        headline = 'Defeat';
-        break;
-      case 0:
-        color = const Color(0xFF546E7A);
-        icon = Icons.handshake_rounded;
-        headline = 'Draw';
-        break;
-      default:
-        color = cs.primary;
-        icon = Icons.flag_rounded;
-        headline = 'Game Over';
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        gradient: LinearGradient(
-          colors: [
-            color.withValues(alpha: 0.22),
-            color.withValues(alpha: 0.06),
-          ],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: color.withValues(alpha: 0.18),
-              boxShadow: [
-                BoxShadow(
-                  color: color.withValues(alpha: 0.35),
-                  blurRadius: 18,
-                  spreadRadius: 1,
-                ),
-              ],
-            ),
-            child: Icon(icon, size: 44, color: color),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            headline,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: color,
-              letterSpacing: 0.5,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            _getResultText(context),
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: cs.onSurfaceVariant,
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-
   void _showRematchStatus(String status, {bool isError = false}) {
     setState(() {
       _rematchStatus = status;
@@ -274,52 +201,298 @@ class _GameOverDialogState extends State<GameOverDialog> {
     );
   }
 
+
+  bool get _isAborted => widget.result is bishop.WonGameAborted;
+
+  ({List<Color> colors, IconData icon, String headline, String sub}) _look(
+    BuildContext context,
+    GameProvider gp,
+  ) {
+    final cs = Theme.of(context).colorScheme;
+    if (_isAborted) {
+      return (
+        colors: [const Color(0xFF607D8B), const Color(0xFF37474F)],
+        icon: Icons.block_rounded,
+        headline: 'Game Aborted',
+        sub: 'No rating change',
+      );
+    }
+    final sub = _getResultText(context);
+    switch (_outcomeForMe(gp)) {
+      case 1:
+        return (
+          colors: [const Color(0xFFFFB300), const Color(0xFFEF6C00)],
+          icon: Icons.emoji_events_rounded,
+          headline: 'Victory!',
+          sub: sub,
+        );
+      case -1:
+        return (
+          colors: [const Color(0xFFE53935), const Color(0xFF7F1D1D)],
+          icon: Icons.heart_broken_rounded,
+          headline: 'Defeat',
+          sub: sub,
+        );
+      case 0:
+        return (
+          colors: [const Color(0xFF607D8B), const Color(0xFF37474F)],
+          icon: Icons.handshake_rounded,
+          headline: 'Draw',
+          sub: sub,
+        );
+      default:
+        return (
+          colors: [cs.primary, Color.lerp(cs.primary, Colors.black, 0.4)!],
+          icon: Icons.flag_rounded,
+          headline: 'Game Over',
+          sub: sub,
+        );
+    }
+  }
+
+  Widget _buildHero(BuildContext context, GameProvider gp) {
+    final look = _look(context, gp);
+    final compact = MediaQuery.of(context).size.height < 700;
+    final iconBox = compact ? 64.0 : 84.0;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(20, compact ? 20 : 30, 20, compact ? 16 : 26),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: look.colors,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Stack(
+        alignment: Alignment.topCenter,
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: -60,
+            left: -50,
+            child: _bubble(150, 0.08),
+          ),
+          Positioned(
+            bottom: -70,
+            right: -40,
+            child: _bubble(170, 0.07),
+          ),
+          Positioned(
+            top: -14,
+            right: -10,
+            child: IconButton(
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.close_rounded, color: Colors.white70),
+              tooltip: 'Close',
+            ),
+          ),
+          SizedBox(
+            width: double.infinity,
+            child: Column(
+            children: [
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.4, end: 1),
+                duration: const Duration(milliseconds: 700),
+                curve: Curves.elasticOut,
+                builder: (context, v, child) =>
+                    Transform.scale(scale: v, child: child),
+                child: Container(
+                  width: iconBox,
+                  height: iconBox,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withValues(alpha: 0.2),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      width: 2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Icon(look.icon, size: iconBox * 0.55, color: Colors.white),
+                ),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                look.headline,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: compact ? 26 : 32,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                look.sub,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: 14,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _bubble(double size, double alpha) => Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: Colors.white.withValues(alpha: alpha),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     return Consumer<GameProvider>(
       builder: (context, gameProvider, child) {
         final onlineGameRoom = gameProvider.onlineGameRoom;
+        final cs = Theme.of(context).colorScheme;
 
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildOutcomeBanner(context, gameProvider),
-            const SizedBox(height: 20),
-            if (onlineGameRoom != null)
-              _buildOnlinePlayerData(context, gameProvider)
-            else
-              _buildLocalPlayerData(context, widget.user),
-            const SizedBox(height: 24),
-            if (onlineGameRoom != null)
-              _buildRematchSection(context, gameProvider, onlineGameRoom)
-            else
-              _buildLocalRematchButtons(context, gameProvider),
-            if (onlineGameRoom != null) ...[
-              const SizedBox(height: 8),
-              TextButton.icon(
-                onPressed: (_buttonsEnabled && !_openingReview)
-                    ? () => _openReview(onlineGameRoom.gameId)
-                    : null,
-                icon: _openingReview
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.replay),
-                label: const Text('Review game'),
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 24,
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(28),
+              child: Material(
+                color: cs.surface,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildHero(context, gameProvider),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                        child: Column(
+                          children: [
+                            if (onlineGameRoom != null)
+                              _buildOnlinePlayerData(context, gameProvider)
+                            else
+                              _buildLocalPlayerData(context, widget.user),
+                            const SizedBox(height: 20),
+                            if (onlineGameRoom != null)
+                              _buildRematchSection(
+                                context,
+                                gameProvider,
+                                onlineGameRoom,
+                              )
+                            else
+                              _buildLocalRematchButtons(context, gameProvider),
+                            if (onlineGameRoom != null) ...[
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextButton.icon(
+                                      onPressed:
+                                          (_buttonsEnabled && !_openingReview)
+                                          ? () => _openReview(
+                                              onlineGameRoom.gameId,
+                                            )
+                                          : null,
+                                      icon: _openingReview
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            )
+                                          : const Icon(
+                                              Icons.replay_rounded,
+                                              size: 18,
+                                            ),
+                                      label: const Text('Review'),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: TextButton.icon(
+                                      onPressed: _buttonsEnabled
+                                          ? () => showReportGameDialog(
+                                              context,
+                                              onlineGameRoom.gameId,
+                                            )
+                                          : null,
+                                      icon: const Icon(
+                                        Icons.flag_outlined,
+                                        size: 18,
+                                      ),
+                                      label: const Text('Report'),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: cs.onSurfaceVariant,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              TextButton.icon(
-                onPressed: _buttonsEnabled
-                    ? () => showReportGameDialog(context, onlineGameRoom.gameId)
-                    : null,
-                icon: const Icon(Icons.flag_outlined),
-                label: const Text('Report opponent'),
-              ),
-            ],
-          ],
+            ),
+          ),
         );
       },
+    );
+  }
+
+  ButtonStyle get _primaryStyle => FilledButton.styleFrom(
+    minimumSize: const Size.fromHeight(52),
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+  );
+
+  ButtonStyle get _secondaryStyle => OutlinedButton.styleFrom(
+    minimumSize: const Size.fromHeight(52),
+    padding: const EdgeInsets.symmetric(horizontal: 10),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+  );
+
+  Widget _statusLine(BuildContext context) {
+    if (_rematchStatus == null) return const SizedBox.shrink();
+    final cs = Theme.of(context).colorScheme;
+    final color = _rematchStatusIsError ? cs.error : cs.primary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          _rematchStatus!,
+          textAlign: TextAlign.center,
+          style: TextStyle(color: color, fontWeight: FontWeight.w600),
+        ),
+      ),
     );
   }
 
@@ -328,6 +501,7 @@ class _GameOverDialogState extends State<GameOverDialog> {
     GameProvider gameProvider,
     GameRoom onlineGameRoom,
   ) {
+    final cs = Theme.of(context).colorScheme;
     final currentUserId = widget.user.uid;
     final rematchOfferedBy = onlineGameRoom.rematchOfferedBy;
 
@@ -337,11 +511,33 @@ class _GameOverDialogState extends State<GameOverDialog> {
       if (rematchOfferedBy == currentUserId) {
         return Column(
           children: [
-            const Text('Waiting for opponent...'),
+            _statusLine(context),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2.4),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Waiting for opponent...',
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 10),
-            const CircularProgressIndicator.adaptive(),
-            const SizedBox(height: 10),
-            TextButton(
+            OutlinedButton(
+              style: _secondaryStyle,
               onPressed: _buttonsEnabled
                   ? () async {
                       dlog('=== CANCEL BUTTON TAPPED ===');
@@ -365,70 +561,104 @@ class _GameOverDialogState extends State<GameOverDialog> {
                       }
                     }
                   : null,
-              child: const Text('Cancel Rematch Offer'),
+              child: const Text('Cancel rematch offer'),
             ),
           ],
         );
       }
       // Subcase 1.2: The opponent sent the offer
       else {
+        final offerer = onlineGameRoom.player1Id == rematchOfferedBy
+            ? onlineGameRoom.player1DisplayName
+            : onlineGameRoom.player2DisplayName ?? 'Opponent';
         return Column(
           children: [
-            Text(
-              '${onlineGameRoom.player1Id == rematchOfferedBy ? onlineGameRoom.player1DisplayName : onlineGameRoom.player2DisplayName ?? 'Opponent'} wants a rematch!',
-              style: Theme.of(context).textTheme.titleMedium,
-              textAlign: TextAlign.center,
+            _statusLine(context),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: cs.primaryContainer.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.autorenew_rounded, color: cs.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '$offerer wants a rematch!',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
-                ElevatedButton(
-                  onPressed: _buttonsEnabled
-                      ? () async {
-                          final error = await gameProvider.handleRematch(true);
-                          if (mounted) {
-                            if (error != null) {
-                              _showRematchStatus(error, isError: true);
-                            } else {
-                              // Accepted. Do NOT pop here: the game screen closes this dialog
-                              // itself the moment the new game starts. A second pop here could
-                              // close the whole game screen (looked like a crash).
-                              _showRematchStatus('Starting rematch...');
+                Expanded(
+                  flex: 1,
+                  child: FilledButton(
+                    style: _primaryStyle,
+                    onPressed: _buttonsEnabled
+                        ? () async {
+                            final error = await gameProvider.handleRematch(
+                              true,
+                            );
+                            if (mounted) {
+                              if (error != null) {
+                                _showRematchStatus(error, isError: true);
+                              } else {
+                                // Accepted. Do NOT pop here: the game screen closes this dialog
+                                // itself the moment the new game starts. A second pop here could
+                                // close the whole game screen (looked like a crash).
+                                _showRematchStatus('Starting rematch...');
+                              }
                             }
                           }
-                        }
-                      : null,
-                  child: const Text('Accept'),
+                        : null,
+                    child: const Text('Accept'),
+                  ),
                 ),
-                OutlinedButton(
-                  onPressed: _buttonsEnabled
-                      ? () async {
-                          dlog('=== DECLINE BUTTON TAPPED ===');
-                          gameProvider.logger.i(
-                            'DIALOG: Decline button pressed',
-                          );
-                          setState(() {
-                            _buttonsEnabled =
-                                false; // Disable during processing
-                          });
-                          final error = await gameProvider.handleRematch(false);
-                          gameProvider.logger.i(
-                            'DIALOG: After handleRematch(false) - rematchOfferedBy should be null',
-                          );
-                          if (mounted) {
-                            if (error != null) {
-                              _showRematchStatus(error, isError: true);
-                            } else {
-                              _showRematchStatus('Rematch rejected');
-                            }
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 1,
+                  child: OutlinedButton(
+                    style: _secondaryStyle,
+                    onPressed: _buttonsEnabled
+                        ? () async {
+                            dlog('=== DECLINE BUTTON TAPPED ===');
+                            gameProvider.logger.i(
+                              'DIALOG: Decline button pressed',
+                            );
                             setState(() {
-                              _buttonsEnabled = true;
+                              _buttonsEnabled =
+                                  false; // Disable during processing
                             });
+                            final error = await gameProvider.handleRematch(
+                              false,
+                            );
+                            gameProvider.logger.i(
+                              'DIALOG: After handleRematch(false) - rematchOfferedBy should be null',
+                            );
+                            if (mounted) {
+                              if (error != null) {
+                                _showRematchStatus(error, isError: true);
+                              } else {
+                                _showRematchStatus('Rematch rejected');
+                              }
+                              setState(() {
+                                _buttonsEnabled = true;
+                              });
+                            }
                           }
-                        }
-                      : null,
-                  child: const Text('Decline'),
+                        : null,
+                    child: const Text('Decline'),
+                  ),
                 ),
               ],
             ),
@@ -438,26 +668,17 @@ class _GameOverDialogState extends State<GameOverDialog> {
     }
     // Case 2: No active rematch offer
     else {
-      // Check if the current user has already sent a rematch offer
       final hasUserSentRematch = gameProvider.rematchOfferSent;
 
       return Column(
         children: [
-          if (_rematchStatus != null) ...[
-            Text(
-              _rematchStatus!,
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-                color: _rematchStatusIsError ? Colors.red : null,
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
+          _statusLine(context),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              Flexible(
-                child: ElevatedButton(
+              Expanded(
+                flex: 1,
+                child: FilledButton.icon(
+                  style: _primaryStyle,
                   onPressed: (_buttonsEnabled && !hasUserSentRematch)
                       ? () async {
                           final error = await gameProvider.offerRematch();
@@ -466,21 +687,32 @@ class _GameOverDialogState extends State<GameOverDialog> {
                           }
                         }
                       : null,
-                  child: hasUserSentRematch
-                      ? const Text('Rematch Requested')
-                      : const Text('Rematch'),
+                  icon: Icon(
+                    hasUserSentRematch
+                        ? Icons.hourglass_top_rounded
+                        : Icons.autorenew_rounded,
+                    size: 20,
+                  ),
+                  label: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      hasUserSentRematch ? 'Requested' : 'Rematch',
+                      maxLines: 1,
+                    ),
+                  ),
                 ),
               ),
-
               // TODO: Add rewarded ad requirement for rematch when user base grows
               // Currently disabled to encourage rematch requests during early growth phase
-              const SizedBox(width: 4),
-              Flexible(
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 1,
                 child: OutlinedButton(
+                  style: _secondaryStyle,
                   onPressed: _buttonsEnabled
                       ? () => Navigator.of(context).pop(GameOverAction.newGame)
                       : null,
-                  child: const Text('New Game'),
+                  child: const FittedBox(fit: BoxFit.scaleDown, child: Text('New game', maxLines: 1)),
                 ),
               ),
             ],
@@ -495,28 +727,30 @@ class _GameOverDialogState extends State<GameOverDialog> {
     GameProvider gameProvider,
   ) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceAround,
       children: [
-        Flexible(
-          child: ElevatedButton(
+        Expanded(
+          flex: 1,
+          child: FilledButton.icon(
+            style: _primaryStyle,
             onPressed: _buttonsEnabled
                 ? () {
                     gameProvider.resetGame(true);
                     Navigator.of(context).pop(GameOverAction.rematch);
                   }
                 : null,
-            child: const Text('Rematch', textAlign: TextAlign.center),
+            icon: const Icon(Icons.autorenew_rounded, size: 20),
+            label: const FittedBox(fit: BoxFit.scaleDown, child: Text('Rematch', maxLines: 1)),
           ),
         ),
-        const SizedBox(width: 4),
-        Flexible(
+        const SizedBox(width: 10),
+        Expanded(
+          flex: 1,
           child: OutlinedButton(
+            style: _secondaryStyle,
             onPressed: _buttonsEnabled
-                ? () {
-                    Navigator.of(context).pop(GameOverAction.newGame);
-                  }
+                ? () => Navigator.of(context).pop(GameOverAction.newGame)
                 : null,
-            child: const Text('New Game', textAlign: TextAlign.center),
+            child: const FittedBox(fit: BoxFit.scaleDown, child: Text('New game', maxLines: 1)),
           ),
         ),
       ],
@@ -524,13 +758,75 @@ class _GameOverDialogState extends State<GameOverDialog> {
   }
 
   Widget _buildLocalPlayerData(BuildContext context, ChessUser user) {
-    return Column(
-      children: [
-        Text(
-          'Your Rating: ${user.classicalRating}',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-      ],
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Text(
+            'YOUR RATING',
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: cs.onSurfaceVariant,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '${user.classicalRating}',
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _playerTile(
+    BuildContext context, {
+    required String name,
+    required int rating,
+    required String? photoUrl,
+    required bool isMe,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Column(
+        children: [
+          ProfileImageWidget(imageUrl: photoUrl, radius: 26),
+          const SizedBox(height: 8),
+          Text(
+            isMe ? 'You' : name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            decoration: BoxDecoration(
+              color: isMe
+                  ? cs.primaryContainer
+                  : cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Text(
+              '$rating',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                color: isMe ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -538,20 +834,50 @@ class _GameOverDialogState extends State<GameOverDialog> {
     BuildContext context,
     GameProvider gameProvider,
   ) {
-    final onlineGameRoom = gameProvider.onlineGameRoom!;
+    final room = gameProvider.onlineGameRoom!;
     final bool isHost = gameProvider.isHost;
+    final cs = Theme.of(context).colorScheme;
 
-    // final String player1Name = onlineGameRoom.player1DisplayName;
-    // final String player2Name = onlineGameRoom.player2DisplayName ?? 'Opponent';
+    final me = _playerTile(
+      context,
+      name: isHost
+          ? room.player1DisplayName
+          : (room.player2DisplayName ?? widget.user.displayName),
+      rating: isHost
+          ? room.player1Rating
+          : (room.player2Rating ?? widget.user.classicalRating),
+      photoUrl: isHost ? room.player1PhotoUrl : room.player2PhotoUrl,
+      isMe: true,
+    );
+    final opp = _playerTile(
+      context,
+      name: isHost
+          ? (room.player2DisplayName ?? 'Opponent')
+          : room.player1DisplayName,
+      rating: isHost
+          ? (room.player2Rating ?? 0)
+          : room.player1Rating,
+      photoUrl: isHost ? room.player2PhotoUrl : room.player1PhotoUrl,
+      isMe: false,
+    );
 
-    // final int player1Score = onlineGameRoom.player1Score;
-    // final int player2Score = onlineGameRoom.player2Score;
-
-    return Text(
-      isHost
-          ? 'Your Rating: ${onlineGameRoom.player1Rating}'
-          : 'Your Rating: ${onlineGameRoom.player2Rating ?? widget.user.classicalRating}',
-      style: Theme.of(context).textTheme.titleMedium,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        me,
+        Padding(
+          padding: const EdgeInsets.only(top: 14),
+          child: Text(
+            'VS',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1,
+              color: cs.onSurfaceVariant.withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+        opp,
+      ],
     );
   }
 }

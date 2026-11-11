@@ -20,6 +20,9 @@ class ProfileImageWidget extends StatelessWidget {
   final File? selectedImageFile;
   final String? selectedAvatar;
 
+  /// Guests may only pick a built-in avatar (no camera / gallery upload).
+  final bool avatarOnly;
+
   const ProfileImageWidget({
     super.key,
     this.imageUrl,
@@ -32,6 +35,7 @@ class ProfileImageWidget extends StatelessWidget {
     this.countryCode,
     this.selectedImageFile,
     this.selectedAvatar,
+    this.avatarOnly = false,
   });
 
   Future<void> _chooseAvatar(BuildContext context) async {
@@ -125,7 +129,9 @@ class ProfileImageWidget extends StatelessWidget {
                   size: radius * 0.25,
                   color: Colors.white,
                 ),
-                onPressed: () => _showImageSourceDialog(context),
+                onPressed: () => avatarOnly
+                    ? _chooseAvatar(context)
+                    : _showImageSourceDialog(context),
               ),
             ),
           ),

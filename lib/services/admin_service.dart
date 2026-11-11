@@ -517,22 +517,35 @@ class AdminService {
 }
 
 /// Contact Us settings controlled from the admin panel.
+///
+/// Defaults are used until the admin saves something different, or when the server
+/// cannot be reached: support e-mail + WhatsApp live chat both shown.
 class ContactConfig {
-  final bool whatsappEnabled;
-  final String whatsappNumber; // digits, with country code (e.g. 8801XXXXXXXXX)
+  static const String defaultEmail = 'support@albonik.com';
+  static const String defaultWhatsapp = '+15059103477';
+
+  final bool whatsappEnabled; // show / hide the "Live chat" (WhatsApp) card
+  final String whatsappNumber; // with country code
   final String email;
 
   const ContactConfig({
-    this.whatsappEnabled = false,
-    this.whatsappNumber = '',
-    this.email = '',
+    this.whatsappEnabled = true,
+    this.whatsappNumber = defaultWhatsapp,
+    this.email = defaultEmail,
   });
 
-  factory ContactConfig.fromJson(Map<String, dynamic> j) => ContactConfig(
-        whatsappEnabled: j['whatsappEnabled'] == true,
-        whatsappNumber: (j['whatsappNumber'] ?? '').toString().trim(),
-        email: (j['email'] ?? '').toString().trim(),
-      );
+  factory ContactConfig.fromJson(Map<String, dynamic> j) {
+    final wa = (j['whatsappNumber'] ?? '').toString().trim();
+    final mail = (j['email'] ?? '').toString().trim();
+    return ContactConfig(
+      // Missing key (never saved) = shown. An explicit false from the admin = hidden.
+      whatsappEnabled: j.containsKey('whatsappEnabled')
+          ? j['whatsappEnabled'] == true
+          : true,
+      whatsappNumber: wa.isEmpty ? defaultWhatsapp : wa,
+      email: mail.isEmpty ? defaultEmail : mail,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'whatsappEnabled': whatsappEnabled,

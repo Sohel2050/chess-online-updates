@@ -4,6 +4,7 @@ import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/screens/login_screen.dart';
 import 'package:flutter_chess_app/screens/privacy_policy_screen.dart';
 import 'package:flutter_chess_app/services/auth_service.dart';
+import 'package:flutter_chess_app/services/sign_in_results.dart';
 import 'package:flutter_chess_app/services/user_service.dart';
 import 'package:flutter_chess_app/utils/constants.dart';
 import 'package:flutter_chess_app/widgets/animated_dialog.dart';
@@ -54,6 +55,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   Future<void> _signUp() async {
+    FocusManager.instance.primaryFocus?.unfocus(); // close the keyboard
     if (_isLoading) return; // Prevent multiple submissions
     if (!_acceptedTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -70,33 +72,64 @@ class _SignUpScreenState extends State<SignUpScreen> {
         _isLoading = true;
       });
       try {
-        await _userService.signUp(
+        final result = await _userService.signUp(
           _emailController.text,
           _passwordController.text,
           _nameController.text,
           _countryCode,
         );
-        if (mounted) {
-          await _userService
-              .signOut(); // Sign out after successful registration
-          if (!mounted) return;
-          Navigator.of(context).pop(); // Navigate back to login screen
+        if (!mounted) return;
 
-          // Show snackbar
-          await Future.delayed(const Duration(milliseconds: 100));
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Account created successfully! Please check your email to verify.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onPrimary,
-                ),
+        // signUp() reports failures as a SignInError (it does not throw), so
+        // check it here. Before, a failed sign up still signed out, navigated
+        // away and showed "Account created successfully".
+        if (result is SignInError) {
+          AnimatedDialog.show(
+            context: context,
+            title: 'Sign Up Failed',
+            child: Text(result.message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('OK'),
               ),
-              backgroundColor: Theme.of(context).colorScheme.primary,
-            ),
+            ],
+          );
+          return;
+        }
+
+        await _userService.signOut(); // Sign out after successful registration
+        if (!mounted) return;
+
+        // Grab these BEFORE leaving this screen (the context dies with it).
+        final messenger = ScaffoldMessenger.of(context);
+        final theme = Theme.of(context);
+        final navigator = Navigator.of(context);
+
+        // This screen is sometimes the ONLY route (the guest "Create Account"
+        // button uses pushAndRemoveUntil(.., (r) => false)). A plain pop() then
+        // leaves an empty navigator = black screen. So pop only if there is
+        // something to go back to, otherwise go to the login screen.
+        if (navigator.canPop()) {
+          navigator.pop();
+        } else {
+          navigator.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const LoginScreen()),
+            (route) => false,
           );
         }
+
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              'Account created successfully! Please check your email to verify.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onPrimary,
+              ),
+            ),
+            backgroundColor: theme.colorScheme.primary,
+          ),
+        );
       } catch (e) {
         if (mounted) {
           AnimatedDialog.show(
@@ -248,7 +281,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
+      child: Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -264,6 +300,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
           child: Padding(
             padding: const EdgeInsets.all(24.0),
             child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               child: Form(
                 key: _formKey,
                 child: Column(
@@ -499,6 +536,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

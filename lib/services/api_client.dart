@@ -1,6 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_chess_app/services/crash_reporter.dart';
 
@@ -153,10 +154,22 @@ class ApiClient {
     return body;
   }
 
-  Future<Map<String, dynamic>> get(String path, {Map<String, dynamic>? query, bool withAuth = true}) async {
+  /// True when the backend answers at all. Any HTTP reply below 500 counts as "up"
+  /// (even a 404 on the root path); no reply, a timeout, or a 5xx from the proxy
+  /// (502/503/504/521/522 when the VPS is off) counts as down.
+  Future<bool> pingServer() async {
+    try {
+      final r = await http.get(Uri.parse(baseUrl)).timeout(const Duration(seconds: 6));
+      return r.statusCode < 500;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>> get(String path, {Map<String, dynamic>? query, bool withAuth = true, Duration? timeout}) async {
     final response = await http
         .get(_uri(path, query), headers: await _headers(withAuth: withAuth))
-        .timeout(_timeout);
+        .timeout(timeout ?? _timeout);
     return _decode(response);
   }
 
@@ -197,12 +210,22 @@ class ApiClient {
     required List<int> bytes,
     required String filename,
     bool withAuth = true,
+    String? authToken, // use this token instead of the stored one
   }) async {
     final request = http.MultipartRequest('POST', _uri(path));
     final headers = await _headers(withAuth: withAuth);
     headers.remove('Content-Type'); // let http set the multipart boundary itself
     request.headers.addAll(headers);
-    request.files.add(http.MultipartFile.fromBytes(field, bytes, filename: filename));
+    if (authToken != null) request.headers['Authorization'] = 'Bearer $authToken';
+    // Without an explicit type the file goes as application/octet-stream and the
+    // server answers "Only image files are allowed".
+    final lower = filename.toLowerCase();
+    final mime = lower.endsWith('.png')
+        ? MediaType('image', 'png')
+        : lower.endsWith('.webp')
+            ? MediaType('image', 'webp')
+            : MediaType('image', 'jpeg');
+    request.files.add(http.MultipartFile.fromBytes(field, bytes, filename: filename, contentType: mime));
 
     final streamedResponse = await request.send().timeout(const Duration(seconds: 60));
     final response = await http.Response.fromStream(streamedResponse);

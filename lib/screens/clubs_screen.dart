@@ -7,7 +7,9 @@ import 'package:flutter_chess_app/services/club_service.dart';
 /// Clubs: my clubs, search / discover, start a new one.
 class ClubsScreen extends StatefulWidget {
   final ChessUser user;
-  const ClubsScreen({super.key, required this.user});
+  /// Inside the Friends tab: no app bar of its own.
+  final bool embedded;
+  const ClubsScreen({super.key, required this.user, this.embedded = false});
 
   @override
   State<ClubsScreen> createState() => _ClubsScreenState();
@@ -81,8 +83,8 @@ class _ClubsScreenState extends State<ClubsScreen> {
     );
     final n = name.text.trim();
     final d = desc.text.trim();
-    name.dispose();
-    desc.dispose();
+    _disposeLater(name);
+    _disposeLater(desc);
     if (ok != true) return;
     try {
       final c = await _service.create(name: n, description: d);
@@ -113,7 +115,10 @@ class _ClubsScreenState extends State<ClubsScreen> {
   Widget build(BuildContext context) {
     final d = _data;
     return Scaffold(
-      appBar: AppBar(title: const Text('Clubs'), actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _load)]),
+      backgroundColor: widget.embedded ? Colors.transparent : null,
+      appBar: widget.embedded
+          ? null
+          : AppBar(title: const Text('Clubs'), actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: _load)]),
       floatingActionButton: widget.user.isGuest ? null : FloatingActionButton.extended(onPressed: _create, icon: const Icon(Icons.add), label: const Text('New club')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -144,4 +149,11 @@ class _ClubsScreenState extends State<ClubsScreen> {
                 ),
     );
   }
+}
+
+/// Disposes a dialog's controller only after the dialog's closing animation is over.
+/// Disposing right after `await showDialog(...)` while the TextField is still on
+/// screen triggers the "_dependents.isEmpty" red-screen assertion.
+void _disposeLater(TextEditingController c) {
+  Future<void>.delayed(const Duration(milliseconds: 600), c.dispose);
 }

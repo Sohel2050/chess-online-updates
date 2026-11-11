@@ -156,7 +156,21 @@ class _GameReplayScreenState extends State<GameReplayScreen> {
   /// Makes a public link for this game (a web page anyone can open) and opens the share sheet.
   Future<void> _shareLink() async {
     final messenger = ScaffoldMessenger.of(context);
-    final url = await SavedGameService().createShareLink(widget.game.gameId);
+    final service = SavedGameService();
+    var url = await service.createShareLink(widget.game.gameId);
+    if (url == null) {
+      // A game that just finished is reviewed under its ROOM id; the link needs the id of the
+      // saved copy the server made. Look that up (it can take a few seconds) and try again.
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Creating the link...'),
+        duration: Duration(seconds: 3),
+      ));
+      final saved = await service.getSavedGameByRoomId(widget.game.gameId);
+      if (saved != null && saved.gameId.isNotEmpty) {
+        url = await service.createShareLink(saved.gameId);
+      }
+      messenger.hideCurrentSnackBar();
+    }
     if (url == null) {
       messenger.showSnackBar(const SnackBar(content: Text('Could not create the link. Check your connection and try again.')));
       return;

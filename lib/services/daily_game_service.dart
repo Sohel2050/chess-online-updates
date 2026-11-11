@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_chess_app/services/api_client.dart';
 
 /// One daily (correspondence) game as the server describes it (backend/controllers/dailyGameController.js).
@@ -42,7 +44,23 @@ class DailyGame {
     this.tournamentRound,
   });
 
-  factory DailyGame.fromJson(Map<String, dynamic> j) => DailyGame(
+  /// [meId] = the logged-in user's id. My colour is worked out from the white/black player
+  /// ids when possible, so both players can never be shown the same colour.
+  factory DailyGame.fromJson(Map<String, dynamic> j, {String? meId}) {
+    final whiteId = j['whiteId']?.toString() ?? '';
+    final blackId = j['blackId']?.toString() ?? '';
+    var color = j['myColor']?.toString() ?? 'white';
+    if (meId != null && meId.isNotEmpty && whiteId != blackId) {
+      if (meId == whiteId) {
+        color = 'white';
+      } else if (meId == blackId) {
+        color = 'black';
+      }
+    }
+    return DailyGame._fromJson(j, color);
+  }
+
+  factory DailyGame._fromJson(Map<String, dynamic> j, String myColor) => DailyGame(
         id: j['id']?.toString() ?? '',
         status: j['status']?.toString() ?? '',
         whiteName: j['whiteName']?.toString() ?? 'White',
@@ -53,7 +71,7 @@ class DailyGame {
         daysPerMove: (j['daysPerMove'] as num?)?.toInt() ?? 3,
         fen: j['fen']?.toString() ?? '',
         moves: ((j['moves'] as List?) ?? const []).map((e) => e.toString()).toList(),
-        myColor: j['myColor']?.toString() ?? 'white',
+        myColor: myColor,
         myTurn: j['myTurn'] == true,
         turnDeadline: j['turnDeadline'] == null ? null : DateTime.tryParse(j['turnDeadline'].toString())?.toLocal(),
         drawOfferedBy: j['drawOfferedBy']?.toString(),
@@ -65,6 +83,7 @@ class DailyGame {
 
   bool get iAmWhite => myColor == 'white';
   String get myId => iAmWhite ? whiteId : blackId;
+  String get opponentId => iAmWhite ? blackId : whiteId;
   String get opponentName => iAmWhite ? blackName : whiteName;
   bool get isActive => status == 'active';
   bool get inTournament => tournamentId != null && tournamentId!.isNotEmpty;
@@ -100,20 +119,31 @@ class DailyGameList {
 class DailyGameService {
   final ApiClient _api = ApiClient.instance;
 
-  List<DailyGame> _games(dynamic raw) =>
-      ((raw as List?) ?? const []).map((e) => DailyGame.fromJson(Map<String, dynamic>.from(e as Map))).toList();
+  List<DailyGame> _games(dynamic raw, String? me) => ((raw as List?) ?? const [])
+      .map((e) => DailyGame.fromJson(Map<String, dynamic>.from(e as Map), meId: me))
+      .toList();
 
-  DailyGame _one(Map<String, dynamic> r) => DailyGame.fromJson(Map<String, dynamic>.from(r['game'] as Map));
+  Future<DailyGame> _one(Map<String, dynamic> r) async =>
+      DailyGame.fromJson(Map<String, dynamic>.from(r['game'] as Map), meId: await _api.currentUserId);
 
   Future<DailyGameList> list() async {
     final r = await _api.get('/daily');
-    return DailyGameList(_games(r['invites']), _games(r['sent']), _games(r['active']), _games(r['finished']));
+    final me = await _api.currentUserId;
+    return DailyGameList(_games(r['invites'], me), _games(r['sent'], me), _games(r['active'], me), _games(r['finished'], me));
   }
 
   Future<DailyGame> get(String id) async => _one(await _api.get('/daily/$id'));
 
-  Future<DailyGame> challenge(String friendId, int daysPerMove, {String color = 'random'}) async =>
-      _one(await _api.post('/daily/challenge', body: {'friendId': friendId, 'daysPerMove': daysPerMove, 'color': color}));
+  /// "random" is decided HERE (a real coin flip) so the server always receives an explicit
+  /// colour for the challenger and the opponent gets the other one.
+  Future<DailyGame> challenge(String friendId, int daysPerMove, {String color = 'random'}) async {
+    final c = color == 'random' ? (Random().nextBool() ? 'white' : 'black') : color;
+    return _one(await _api.post('/daily/challenge', body: {'friendId': friendId, 'daysPerMove': daysPerMove, 'color': c}));
+  }
+
+  /// Rematch = a new challenge to the same opponent with the colours swapped.
+  Future<DailyGame> rematch(DailyGame g) =>
+      challenge(g.opponentId, g.daysPerMove, color: g.iAmWhite ? 'black' : 'white');
 
   Future<DailyGame> accept(String id) async => _one(await _api.post('/daily/$id/accept'));
   Future<void> decline(String id) async => _api.post('/daily/$id/decline');

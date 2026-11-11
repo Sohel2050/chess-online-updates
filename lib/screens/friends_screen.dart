@@ -1,6 +1,10 @@
 import 'package:flutter_chess_app/utils/debug_log.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_chess_app/services/game_socket_service.dart';
+import 'package:flutter_chess_app/services/daily_game_service.dart';
+import 'package:flutter_chess_app/screens/clubs_screen.dart';
+import 'package:flutter_chess_app/screens/daily_games_screen.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/providers/game_provider.dart';
 import 'package:flutter_chess_app/screens/chat_screen.dart';
@@ -40,6 +44,9 @@ class _FriendsScreenState extends State<FriendsScreen>
   final FriendService _friendService = FriendService();
   final ChatService _chatService = ChatService();
   final TextEditingController _searchController = TextEditingController();
+  // Daily games where it is MY turn (red number on the Daily tab).
+  int _dailyYourTurn = 0;
+  StreamSubscription<Map<String, dynamic>>? _dailyLiveSub;
   List<ChessUser> _searchResults = [];
   bool _isSearching = false;
   //BannerAd? _bannerAd;
@@ -56,14 +63,27 @@ class _FriendsScreenState extends State<FriendsScreen>
     dlog("FriendsScreen initialized");
     _tabController = TabController(
       initialIndex: widget.initialTabIndex,
-      length: 4,
+      length: 6,
       vsync: this,
     );
+
+    if (!widget.user.isGuest) {
+      _loadDailyCount();
+      _dailyLiveSub = GameSocketService.instance.onDailyUpdate.listen((_) => _loadDailyCount());
+    }
 
     // Only load ad if screen is initially visible
     if (widget.isVisible) {
       // Native ads replaced with MonetizationBannerWidget
     }
+  }
+
+  Future<void> _loadDailyCount() async {
+    try {
+      final d = await DailyGameService().list();
+      final n = d.active.where((g) => g.myTurn).length + d.invites.length;
+      if (mounted && n != _dailyYourTurn) setState(() => _dailyYourTurn = n);
+    } catch (_) {}
   }
 
   @override
@@ -130,6 +150,7 @@ class _FriendsScreenState extends State<FriendsScreen>
   @override
   void dispose() {
     _searchDebounce?.cancel();
+    _dailyLiveSub?.cancel();
     _tabController.dispose();
     _searchController.dispose();
     //_disposeBannerAd();
@@ -215,6 +236,8 @@ class _FriendsScreenState extends State<FriendsScreen>
         title: const Text('Friends'),
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: true, // 6 tabs: scroll instead of cutting the labels
+          tabAlignment: TabAlignment.start,
           tabs: [
             const Tab(text: 'Friends'),
             Tab(
@@ -239,6 +262,13 @@ class _FriendsScreenState extends State<FriendsScreen>
                 },
               ),
             ),
+            Tab(
+              child: UnreadBadgeWidget(
+                count: _dailyYourTurn,
+                child: const Text('Daily', maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+            ),
+            const Tab(text: 'Clubs'),
             const Tab(text: 'Find Players'),
             const Tab(text: 'Blocked'),
           ],
@@ -249,6 +279,12 @@ class _FriendsScreenState extends State<FriendsScreen>
         children: [
           _buildFriendsList(),
           _buildRequestsList(),
+          widget.user.isGuest
+              ? GuestWidget(context: context)
+              : DailyGamesScreen(user: widget.user, embedded: true),
+          widget.user.isGuest
+              ? GuestWidget(context: context)
+              : ClubsScreen(user: widget.user, embedded: true),
           _buildFindPlayersTab(),
           _buildBlockedUsersList(),
         ],
@@ -683,6 +719,13 @@ child: Text(
       // Wait for game to become active before navigating
       await gameProvider.waitForGameToStart();
 
+      // User pressed Cancel: the dialog is already closed, do NOT open the game screen.
+      if (gameProvider.searchCancelled) {
+        gameProvider.setLoading(false);
+        if (mounted) LoadingDialog.hide(context);
+        return;
+      }
+
       gameProvider.setLoading(false);
 
       if (mounted) {
@@ -698,6 +741,17 @@ child: Text(
           context,
           MaterialPageRoute(
             builder: (context) => GameScreen(user: widget.user),
+          ),
+        );
+      }
+    } on InviteDeclinedException {
+      await gameProvider.cancelOnlineGameSearch(isFriend: true);
+      if (mounted) {
+        LoadingDialog.hide(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${friend.displayName} declined your invite.'),
+            backgroundColor: Colors.orange,
           ),
         );
       }

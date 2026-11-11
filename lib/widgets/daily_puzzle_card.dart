@@ -62,7 +62,9 @@ class _DailyPuzzleCardState extends State<DailyPuzzleCard>
       final puzzleProvider = context.read<PuzzleProvider>();
       final user = context.read<UserProvider>().user;
       await puzzleProvider.initialize(
-        userId: user?.isGuest == false ? user?.uid : null,
+        userId: (user?.uid != null && user!.uid!.isNotEmpty)
+            ? user.uid
+            : 'guest_local',
       );
       if (!mounted) return;
       await Navigator.of(context).push(

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/admin_service.dart';
 
-/// Contact Us: support email (mailto) and WhatsApp. Both are controlled from the admin panel:
-/// the email address is typed there, WhatsApp can be switched on/off there.
+/// Contact Us: support e-mail on top, WhatsApp "Live chat" below it.
+/// The admin panel (Contact Us card) can change the e-mail and show / hide Live chat.
 class ContactUsScreen extends StatefulWidget {
   const ContactUsScreen({super.key});
 
@@ -12,6 +13,7 @@ class ContactUsScreen extends StatefulWidget {
 }
 
 class _ContactUsScreenState extends State<ContactUsScreen> {
+  static const Color _waGreen = Color(0xFF25D366);
   late Future<ContactConfig> _future;
 
   @override
@@ -39,7 +41,18 @@ class _ContactUsScreenState extends State<ContactUsScreen> {
     _open(Uri.parse('mailto:$email?subject=$subject'));
   }
 
-  void _whatsapp(String digits) => _open(Uri.parse('https://wa.me/$digits'));
+  void _liveChat(String digits) {
+    final text = Uri.encodeComponent('Hello, I need help with the Chess app.');
+    _open(Uri.parse('https://wa.me/$digits?text=$text'));
+  }
+
+  Future<void> _copy(String value) async {
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Copied'), duration: Duration(seconds: 1)),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -52,48 +65,177 @@ class _ContactUsScreenState extends State<ContactUsScreen> {
             return const Center(child: CircularProgressIndicator.adaptive());
           }
           final cfg = snap.data ?? const ContactConfig();
-          if (!cfg.hasEmail && !cfg.hasWhatsapp) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Contact options are not available right now. Please check back later.',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            );
-          }
           return ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
             children: [
-              Text(
-                'We would love to hear from you. Questions, feedback or problems with the app - get in touch.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
+              _hero(context),
+              const SizedBox(height: 20),
               if (cfg.hasEmail)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.email_outlined),
-                    title: const Text('Email'),
-                    subtitle: Text(cfg.email),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _mail(cfg.email),
-                  ),
+                _contactCard(
+                  context,
+                  color: Theme.of(context).colorScheme.primary,
+                  icon: Icons.mail_rounded,
+                  title: 'Email us',
+                  subtitle: cfg.email,
+                  note: 'Best for questions, account help and privacy requests',
+                  onTap: () => _mail(cfg.email),
+                  onLongPress: () => _copy(cfg.email),
+                  actionLabel: 'Send email',
                 ),
+              if (cfg.hasEmail && cfg.hasWhatsapp) const SizedBox(height: 14),
               if (cfg.hasWhatsapp)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.chat_outlined, color: Colors.green),
-                    title: const Text('WhatsApp'),
-                    subtitle: Text('+${cfg.whatsappDigits}'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _whatsapp(cfg.whatsappDigits),
+                _contactCard(
+                  context,
+                  color: _waGreen,
+                  icon: Icons.forum_rounded,
+                  title: 'Live chat',
+                  subtitle: 'Chat with us on WhatsApp',
+                  note: '+${cfg.whatsappDigits}',
+                  onTap: () => _liveChat(cfg.whatsappDigits),
+                  onLongPress: () => _copy('+${cfg.whatsappDigits}'),
+                  actionLabel: 'Start chat',
+                ),
+              if (!cfg.hasEmail && !cfg.hasWhatsapp)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'Contact options are not available right now. Please check back later.',
+                    textAlign: TextAlign.center,
                   ),
                 ),
+              const SizedBox(height: 24),
+              Center(
+                child: Text(
+                  'Albonik LLC  •  Albonik.com',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _hero(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          colors: [cs.primary, Color.lerp(cs.primary, cs.tertiary, 0.65)!],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.support_agent_rounded, color: Colors.white, size: 32),
+          ),
+          const SizedBox(width: 16),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'We are here to help',
+                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Questions, feedback or a problem with the app? Get in touch.',
+                  style: TextStyle(color: Colors.white70, height: 1.3),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _contactCard(
+    BuildContext context, {
+    required Color color,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String note,
+    required String actionLabel,
+    required VoidCallback onTap,
+    required VoidCallback onLongPress,
+  }) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    return Material(
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: color.withValues(alpha: 0.35), width: 1.4),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 50,
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(icon, color: color, size: 28),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 2),
+                        Text(subtitle, style: tt.bodyMedium, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(note, style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: onTap,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: color,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  child: Text(actionLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

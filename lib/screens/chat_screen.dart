@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:flutter_chess_app/widgets/wave_pulse_icon.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_chess_app/models/chat_message_model.dart';
@@ -73,6 +74,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   bool _sending = false;
   bool _showEmoji = false;
+  bool _showQuick = false; // quick messages panel (top), opened from the app bar icon
   ChatMessage? _replyTo;
 
   // typing indicator
@@ -194,7 +196,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// One-tap suggestion: sent immediately, the typed draft is left untouched.
-  Future<void> _sendQuick(String text) => _send(text);
+  Future<void> _sendQuick(String text) {
+    if (mounted) setState(() => _showQuick = false); // close the panel after a pick
+    return _send(text);
+  }
 
   Future<void> _sendSticker(String id) => _send(id, sticker: true);
 
@@ -415,6 +420,11 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       await gameProvider.waitForGameToStart();
+      if (gameProvider.searchCancelled) {
+        gameProvider.setLoading(false);
+        if (mounted) LoadingDialog.hide(context);
+        return;
+      }
       gameProvider.setLoading(false);
       if (mounted) LoadingDialog.hide(context);
 
@@ -425,6 +435,10 @@ class _ChatScreenState extends State<ChatScreen> {
           MaterialPageRoute(builder: (_) => GameScreen(user: me)),
         );
       }
+    } on InviteDeclinedException {
+      await gameProvider.cancelOnlineGameSearch(isFriend: true);
+      if (mounted) LoadingDialog.hide(context);
+      _toast('Your friend declined the invite.', color: Colors.orange);
     } catch (e) {
       gameProvider.setLoading(false);
       if (mounted) LoadingDialog.hide(context);
@@ -463,7 +477,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       LoadingDialog.hide(context);
       if (!ok) {
-        _toast('Game not found or is no longer available.',
+        _toast(gameProvider.lastJoinError ?? 'Game not found or is no longer available.',
             color: Colors.orange);
         return;
       }
@@ -750,6 +764,22 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
           actions: [
+            WavePulseIconButton(
+              tooltip: 'Quick messages',
+              icon: _showQuick ? Icons.close_rounded : Icons.bolt_rounded,
+              color: _showQuick
+                  ? (Theme.of(context).iconTheme.color ??
+                      Theme.of(context).colorScheme.onSurface)
+                  : Theme.of(context).colorScheme.primary,
+              animate: !_showQuick, // waves only while the panel is closed
+              onPressed: () => setState(() {
+                _showQuick = !_showQuick;
+                if (_showQuick) {
+                  _showEmoji = false;
+                  _focusNode.unfocus();
+                }
+              }),
+            ),
             PopupMenuButton<String>(
               onSelected: (value) {
                 if (value == 'report') _showReportDialog();
@@ -764,6 +794,12 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         body: Column(
           children: [
+            AnimatedSize(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              alignment: Alignment.topCenter,
+              child: _showQuick ? _buildQuickReplies() : const SizedBox(width: double.infinity),
+            ),
             Expanded(
               child: StreamBuilder<List<ChatMessage>>(
                 stream: _chatService.getMessages(_chatRoomId),
@@ -821,27 +857,54 @@ class _ChatScreenState extends State<ChatScreen> {
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
+  /// Suggestion chips laid out like YouTube tags: side by side with a small
+  /// gap, wrapping onto the next line (no sideways scrolling). The area is
+  /// capped to about three rows so the chat itself keeps its space; if there
+  /// are more chips it scrolls vertically.
   Widget _buildQuickReplies() {
     final cs = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 42,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-        itemCount: _quickReplies.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          final text = _quickReplies[i];
-          return ActionChip(
-            label: Text(text),
-            labelStyle: TextStyle(color: cs.onSecondaryContainer, fontSize: 13),
-            backgroundColor: cs.secondaryContainer.withValues(alpha: 0.6),
-            side: BorderSide.none,
-            shape: const StadiumBorder(),
-            visualDensity: VisualDensity.compact,
-            onPressed: _sending ? null : () => _sendQuick(text),
-          );
-        },
+    final maxH = MediaQuery.of(context).size.height * 0.38;
+    return Material(
+      color: cs.surfaceContainerLow,
+      elevation: 1,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxH),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+          child: SizedBox(
+            width: double.infinity,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Quick messages',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final text in _quickReplies)
+                      ActionChip(
+                        label: Text(text),
+                        labelStyle: TextStyle(color: cs.onSecondaryContainer, fontSize: 13),
+                        backgroundColor: cs.secondaryContainer.withValues(alpha: 0.6),
+                        side: BorderSide.none,
+                        shape: const StadiumBorder(),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        onPressed: _sending ? null : () => _sendQuick(text),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -899,7 +962,6 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _buildQuickReplies(),
           _buildReplyPreview(),
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),

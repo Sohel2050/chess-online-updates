@@ -1,7 +1,12 @@
+import 'dart:async';
+import 'dart:io' show SocketException;
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_chess_app/services/analytics_service.dart';
 import 'package:flutter_chess_app/models/user_model.dart';
 import 'package:flutter_chess_app/services/api_client.dart';
+import 'package:flutter_chess_app/services/assets_manager.dart';
 import 'package:flutter_chess_app/services/push_service.dart';
+import 'package:flutter_chess_app/services/offline_service.dart';
 import 'package:flutter_chess_app/services/sign_in_results.dart';
 import 'package:logger/logger.dart';
 
@@ -43,6 +48,40 @@ class AuthService {
     );
   }
 
+  /// Fires when the default avatar of a brand-new account has finished uploading
+  /// in the background (uid, photoUrl). main.dart listens and refreshes the UI.
+  static final StreamController<MapEntry<String, String>> _avatarReady =
+      StreamController<MapEntry<String, String>>.broadcast();
+  static Stream<MapEntry<String, String>> get avatarReady => _avatarReady.stream;
+
+  /// Gives a BRAND-NEW account the default avatar, IN THE BACKGROUND.
+  /// Before, guest creation / sign up WAITED for this image upload (up to 60 s on a
+  /// slow network), so the app looked stuck on open, login and sign up. Now the
+  /// user is returned at once and the photo appears when the upload finishes.
+  /// Only runs when the account has no photo at all, so existing photos are never touched.
+  void _setDefaultAvatarInBackground(ChessUser user, String token) {
+    final photo = user.photoUrl;
+    if (photo != null && photo.isNotEmpty) return;
+    final uid = user.uid;
+    unawaited(() async {
+      try {
+        // The server refuses asset paths in photoUrl: upload the default avatar as a photo.
+        final data = await rootBundle.load(AssetsManager.defaultAvatar);
+        final result = await _api.uploadFile(
+          '/users/me/profile-image',
+          field: 'image',
+          bytes: data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          filename: 'avatar.jpg',
+          authToken: token, // sign up logs out right after: keep using THIS account's token
+        );
+        final url = result['photoUrl'] as String?;
+        if (url != null && uid != null) _avatarReady.add(MapEntry(uid, url));
+      } catch (e) {
+        _logger.w('Could not save default avatar: $e');
+      }
+    }());
+  }
+
   /// Same validation the old UserService exposed, kept so screens that
   /// call `_userService.isValidEmail(...)` in their form validators keep
   /// working unchanged.
@@ -61,6 +100,17 @@ class AuthService {
     return null;
   }
 
+  /// Plain-words reason for a failed request (instead of a vague "Something went wrong").
+  String _networkMessage(Object e) {
+    if (e is TimeoutException) {
+      return 'The server took too long to respond. Please check your internet and try again.';
+    }
+    if (e is SocketException || e.runtimeType.toString() == 'ClientException') {
+      return 'Cannot reach the server. Please check your internet connection and try again.';
+    }
+    return 'Something went wrong (${e.runtimeType}). Please try again.';
+  }
+
   /// POST /auth/login — replaces FirebaseAuth.signInWithEmailAndPassword.
   Future<SignInResult> signIn(String email, String password) async {
     try {
@@ -72,12 +122,13 @@ class AuthService {
       final token = response['token'] as String;
       await _api.setToken(token);
       final user = _userFromJson(Map<String, dynamic>.from(response['user']));
+      await OfflineService().cacheUser(user); // lets the app open while the server is down
       return SignInSuccess(user);
     } on ApiException catch (e) {
       return SignInError(e.message);
     } catch (e) {
       _logger.e('signIn failed: $e');
-      return SignInError('Something went wrong. Please try again.');
+      return SignInError(_networkMessage(e));
     }
   }
 
@@ -117,14 +168,18 @@ class AuthService {
       );
       final token = response['token'] as String;
       await _api.setToken(token);
+      // A guest being upgraded keeps its own photo (the server upgrades the same
+      // account); only a brand-new account without a photo gets the default.
       final user = _userFromJson(Map<String, dynamic>.from(response['user']));
+      _setDefaultAvatarInBackground(user, token);
+      await OfflineService().cacheUser(user);
       AnalyticsService.instance.track('signup', {'method': 'email'});
       return SignInSuccess(user);
     } on ApiException catch (e) {
       return SignInError(e.message);
     } catch (e) {
       _logger.e('signUp failed: $e');
-      return SignInError('Something went wrong. Please try again.');
+      return SignInError(_networkMessage(e));
     }
   }
 
@@ -133,7 +188,10 @@ class AuthService {
     final response = await _api.post('/auth/guest', withAuth: false);
     final token = response['token'] as String;
     await _api.setToken(token);
-    return _userFromJson(Map<String, dynamic>.from(response['user']));
+    final user = _userFromJson(Map<String, dynamic>.from(response['user']));
+    _setDefaultAvatarInBackground(user, token);
+    await OfflineService().cacheUser(user);
+    return user;
   }
 
   /// Restores a session from a locally stored JWT (app startup) —
@@ -146,19 +204,41 @@ class AuthService {
     if (token == null) return null;
     try {
       final response = await _api.get('/auth/me');
-      return _userFromJson(Map<String, dynamic>.from(response['user']));
+      final user = _userFromJson(Map<String, dynamic>.from(response['user']));
+      await OfflineService().cacheUser(user);
+      return user;
     } on ApiException catch (e) {
-      if (e.statusCode == 401) await _api.clearToken();
-      return null;
+      if (e.statusCode == 401) {
+        await _api.clearToken();
+        await OfflineService().clearUserCache();
+        return null;
+      }
+      // Server error (VPS off / restarting): the token is still valid. Use the saved copy of
+      // the user. NEVER return null here: that made the app create a brand-new guest and
+      // overwrite the saved login, which looked like "logged out".
+      _logger.w('restoreSession: server error ${e.statusCode}, using cached user');
+      final cached = await OfflineService().getCachedUser();
+      if (cached != null) return cached;
+      throw SessionUnavailableException();
     } catch (e) {
-      _logger.e('restoreSession failed: $e');
-      return null;
+      _logger.e('restoreSession failed (network?): $e');
+      final cached = await OfflineService().getCachedUser();
+      if (cached != null) return cached;
+      throw SessionUnavailableException();
     }
   }
 
   Future<void> signOut() async {
+    await OfflineService().clearUserCache();
     // Needs the login token, so it must run before clearToken().
     await PushService.instance.unregister();
     await _api.clearToken();
   }
+}
+
+/// The saved login is still valid but the server cannot be reached and there is no saved copy
+/// of the user yet. The app shows a retry screen instead of creating a new guest account.
+class SessionUnavailableException implements Exception {
+  @override
+  String toString() => 'Server not reachable';
 }

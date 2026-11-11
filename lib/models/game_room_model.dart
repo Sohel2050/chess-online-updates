@@ -43,6 +43,8 @@ class GameRoom {
 
   /// Friends switch + the friends allowed to watch while it is ON.
   final bool friendsWatch;
+  /// The opponent already agreed to Live in this game (no new question when switching it on).
+  final bool liveConsent;
 
   /// Players who switched emoji reactions OFF in this game.
   final List<String> reactionsMuted;
@@ -99,6 +101,7 @@ class GameRoom {
     this.spectatorLink,
     this.publicWatch = false,
     this.friendsWatch = false,
+    this.liveConsent = false,
     this.reactionsMuted = const [],
     this.spectatorInvitedIds = const [],
     this.reactionCounts = const {},
@@ -273,6 +276,7 @@ class GameRoom {
       spectatorLink: json['roomCode'],
       publicWatch: json['publicWatch'] == true,
       friendsWatch: json['friendsWatch'] == true,
+      liveConsent: json['liveConsent'] == true,
       reactionsMuted: List<String>.from((json['reactionsMuted'] ?? []).map((e) => e.toString())),
       spectatorInvitedIds: List<String>.from((json['spectatorInvitedIds'] ?? []).map((e) => e.toString())),
       reactionCounts: parseReactionCounts(json['reactionCounts']),
@@ -323,6 +327,7 @@ class GameRoom {
     String? spectatorLink,
     bool? publicWatch,
     bool? friendsWatch,
+    bool? liveConsent,
     List<String>? reactionsMuted,
     List<String>? spectatorInvitedIds,
     Map<String, Map<String, int>>? reactionCounts,
@@ -371,6 +376,7 @@ class GameRoom {
       spectatorLink: spectatorLink ?? this.spectatorLink,
       publicWatch: publicWatch ?? this.publicWatch,
       friendsWatch: friendsWatch ?? this.friendsWatch,
+      liveConsent: liveConsent ?? this.liveConsent,
       reactionsMuted: reactionsMuted ?? this.reactionsMuted,
       spectatorInvitedIds: spectatorInvitedIds ?? this.spectatorInvitedIds,
       reactionCounts: reactionCounts ?? this.reactionCounts,

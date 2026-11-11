@@ -25,19 +25,18 @@ class FriendRequestWidget extends StatelessWidget {
         ],
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          const Text(
-            'You have a friend request!',
-            style: TextStyle(fontSize: 16),
+          const Expanded(
+            child: Text(
+              'You have a friend request!',
+              style: TextStyle(fontSize: 16),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
-          Row(
-            children: [
-              TextButton(onPressed: onAccept, child: const Text('Accept')),
-              const SizedBox(width: 8),
-              TextButton(onPressed: onDecline, child: const Text('Decline')),
-            ],
-          ),
+          const SizedBox(width: 8),
+          TextButton(onPressed: onAccept, child: const Text('Accept')),
+          TextButton(onPressed: onDecline, child: const Text('Decline')),
         ],
       ),
     );

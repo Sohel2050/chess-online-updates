@@ -36,9 +36,12 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
       final userProvider = context.read<UserProvider>();
 
       // Initialize with user ID if available
-      final userId = userProvider.user?.isGuest == false
-          ? userProvider.user?.uid
-          : null;
+      // Guests have no uid: use a fixed local id so their puzzle progress
+      // is still saved on the device and survives closing the app.
+      final rawUid = userProvider.user?.uid;
+      final userId = (rawUid != null && rawUid.isNotEmpty)
+          ? rawUid
+          : 'guest_local';
       await puzzleProvider.initialize(userId: userId);
     } catch (e) {
       if (mounted) {
@@ -123,6 +126,35 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (puzzleProvider.usingOfflinePuzzles) ...[
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.cloud_off_rounded, color: Colors.orange),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Could not load puzzles from the server, showing offline puzzles. '
+                              '${puzzleProvider.puzzleLoadError ?? ''}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => puzzleProvider.retryInitialization(),
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   // Two compact shortcut tiles side by side
                   Row(
                     children: [
@@ -158,8 +190,11 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
                   // Difficulty cards
                   Expanded(
                     child: ListView.builder(
-                      itemCount: PuzzleDifficulty.values.length,
+                      itemCount: PuzzleDifficulty.values.length + 1,
                       itemBuilder: (context, index) {
+                        if (index == PuzzleDifficulty.values.length) {
+                          return _buildLoadMore(context, puzzleProvider);
+                        }
                         final difficulty = PuzzleDifficulty.values[index];
                         return _buildDifficultyCard(
                           context,
@@ -174,6 +209,49 @@ class _PuzzlesScreenState extends State<PuzzlesScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// "Load More" button below the difficulty cards: loads the next page of
+  /// puzzles from the server. Hidden when there is nothing more to load.
+  Widget _buildLoadMore(BuildContext context, PuzzleProvider puzzleProvider) {
+    if (!puzzleProvider.hasMorePuzzles) return const SizedBox(height: 16);
+    final loading = puzzleProvider.isLoadingMorePuzzles;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: OutlinedButton.icon(
+        onPressed: loading
+            ? null
+            : () async {
+                final messenger = ScaffoldMessenger.of(context);
+                try {
+                  final added = await puzzleProvider.loadMorePuzzles();
+                  messenger.showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        added > 0
+                            ? 'Loaded $added more puzzles'
+                            : 'No more puzzles to load',
+                      ),
+                    ),
+                  );
+                } catch (_) {
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text('Could not load more puzzles. Please try again.'),
+                    ),
+                  );
+                }
+              },
+        icon: loading
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.expand_more),
+        label: Text(loading ? 'Loading...' : 'Load More'),
       ),
     );
   }
